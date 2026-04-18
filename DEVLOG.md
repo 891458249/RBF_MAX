@@ -91,6 +91,28 @@
 
 Slice 03 — `quaternion.hpp`（Swing-Twist 分解、Log/Exp map）将消费本切片的 `kQuatIdentityEps` 常量与 `quaternion_abs_dot` 工具。
 
+### Hotfixes (during Slice 02 admission gate)
+
+Three-round failure → green sequence during the local double-build verification, documented here for historical accuracy and to seed the tech-debt register.
+
+**Round 1 — MSVC C4819 under code page 936**
+Slice 01 was never compiled under MSVC; UTF-8 sources without BOM raised C4819 → C2220 under `/WX`. Fix: `cmake/CompilerFlags.cmake` gained `/utf-8` in the MSVC branch.
+→ committed as `build(build): add /utf-8 ...`
+
+**Round 2 — Arithmetic slip in the tolerance recommendation (R-09)**
+The review channel recommended `EXPECT_NEAR(d, theta, theta * 2e-7)`, which at θ=1e-7 evaluates to `2e-14` — 50× tighter than the original `1e-12`, not looser as intended. Root cause: failing to mentally substitute θ before dispatching a numeric tolerance. Remedy internalized: any future tolerance recommendation must be preceded by explicit "dimension / substituted value / margin" self-check.
+
+**Round 3 — §5.2.3 doc phrasing misled the test author**
+"1×10⁻⁷ 相对" in §5.2.3 was literally unbounded as θ → 0; the test author (this channel's past self) consumed it as if it were a well-defined relative error. Fix: prune the ambiguous "相对" clause and add an explicit caveat that tests must use absolute tolerances.
+→ committed as `fix(tests): align near-identity ...`
+
+**Tech-debt register additions**
+- R-09 (new): arithmetic slip protocol — numeric recommendations must include substituted-value self-check before dispatch.
+
+**Outstanding after Slice 02 admission**
+- `v0.1.0` / `v0.2.0` tags not yet pushed (pending next authorization).
+- Slice 02.5 (CI matrix) not yet started.
+
 ---
 
 ## 2026-04-18 · Slice 01 — Kernel Math Functions
