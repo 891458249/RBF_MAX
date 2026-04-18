@@ -24,6 +24,7 @@ function(rbfmax_apply_warnings tgt)
             /wd4714                          # __forceinline not inlined (Eigen).
             /EHsc                            # Standard C++ exception model.
             /Zc:__cplusplus                  # Report correct __cplusplus value.
+            /utf-8                           # Treat source & exec as UTF-8 (CJK-safe).
         )
         if(RBF_WARNINGS_AS_ERRORS)
             target_compile_options(${tgt} PRIVATE /WX)
