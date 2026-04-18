@@ -1,4 +1,4 @@
-# RBF_MAX — 数学推导（阶段一：核函数）
+# RBF_MAX — 数学推导（阶段一）
 
 > 本文件锁定 `kernel/include/rbfmax/kernel_functions.hpp` 中每个核函数的解析形式、定义域、导数以及在 $r=0$ 处的极限行为。后续阶段新增核函数或求解器时，须在此文件追加对应章节，不得删改既有章节。
 
@@ -146,8 +146,107 @@ $$
 
 ---
 
-## 5. 后续阶段占位
+## 5. 距离度量（阶段一 · 切片 02）
 
-- §6 将记录四元数测地距离 $d_{\text{geo}}(q_1, q_2) = 2\arccos(|q_1\cdot q_2|)$ 的 clamp 推导（接入 `distance.hpp` 时）。
-- §7 将记录 Swing-Twist 分解的纯四元数代数证明（接入 `quaternion.hpp` 时）。
-- §8 将记录 Tikhonov 正则化正规方程 $(\mathbf{A}+\lambda\mathbf{I})\mathbf{w}=\mathbf{y}$ 的条件数改善估计（接入 `solver.hpp` 时）。
+### 5.1 欧氏距离
+
+对 $\mathbf{a}, \mathbf{b} \in \mathbb{R}^d$：
+
+$$
+d_{\text{sq}}(\mathbf{a}, \mathbf{b}) = \lVert \mathbf{a} - \mathbf{b}\rVert^2,
+\qquad
+d(\mathbf{a}, \mathbf{b}) = \sqrt{d_{\text{sq}}(\mathbf{a}, \mathbf{b})} .
+$$
+
+KD-Tree NN 查询使用 $d_{\text{sq}}$（单调等价于 $d$，但省去 `sqrt`）。接口以 `Eigen::MatrixBase<Derived>` 模板接收，支持 `Vector3`、`VectorX`、`Map<>`、`Block<>` 等所有 Eigen 表达式，且不触发中间临时量的堆分配。
+
+### 5.2 四元数测地距离 — 商空间 $S^3/\{\pm 1\}\simeq SO(3)$
+
+#### 5.2.1 定义
+
+对单位四元数 $q_1, q_2 \in S^3$：
+
+$$
+d_{\text{geo}}(q_1, q_2) = 2\arccos\!\bigl(|\,q_1\!\cdot\!q_2\,|\bigr) \in [0, \pi] .
+$$
+
+**反号归一（antipodal reduction）**：因 $q$ 与 $-q$ 表示相同旋转，取 $|q_1\cdot q_2|$ 将商空间 $S^3/\{\pm 1\}$ 上的距离化为 $S^3$ 上的"短弧"：
+
+$$
+|q_1\cdot(-q_2)| = |-q_1\cdot q_2| = |q_1\cdot q_2| .
+$$
+
+#### 5.2.2 数值分支判据
+
+直接计算 $\arccos(d)$ 在 $d \to 1^-$ 区域会丢失 7-8 位有效数字（"灾难性相消"）。原因：Taylor 展开
+
+$$
+\arccos(d) = \sqrt{2(1 - d)}\,\Bigl[1 + \tfrac{1 - d}{12} + \mathcal{O}\bigl((1-d)^2\bigr)\Bigr],
+$$
+
+浮点计算 $1 - d$ 时若 $d = 1 - \varepsilon$ 且 $\varepsilon \lesssim \varepsilon_{\text{mach}}$，则 $1-d$ 在有限精度下归零。改用半角形式
+
+$$
+\arccos(d) = \arcsin\!\bigl(\sqrt{1 - d^2}\bigr)
+= \arcsin\!\bigl(\sqrt{(1-d)(1+d)}\bigr),
+$$
+
+其中 $1 + d \in [1, 2]$ 精度保持完整，损失只来自 $1 - d$ 单次减法（比 `acos` 少一次转函数调用链上的放大）。
+
+代码中的阈值 `kQuatIdentityEps = 1e-14` 即 $d \ge 1 - 10^{-14}$ 切换到 asin 分支。
+
+#### 5.2.3 误差上界
+
+**常规 acos 分支**（$|d| \le 1 - 10^{-14}$）：$\arccos$ 的 Lipschitz 常数在该区域为
+
+$$
+\bigl|\tfrac{d}{dx}\arccos(x)\bigr| = \tfrac{1}{\sqrt{1-x^2}} \le \tfrac{1}{\sqrt{1 - (1 - 10^{-14})^2}} \approx 7.07\times 10^{6},
+$$
+
+配合 $|d - \hat d| \lesssim \varepsilon_{\text{mach}} \approx 2.2\times 10^{-16}$，距离相对误差上界
+
+$$
+|\Delta d_{\text{geo}}| \lesssim 2 \cdot 7.07\times 10^{6} \cdot 2.2\times 10^{-16} \approx 3\times 10^{-9}.
+$$
+
+考虑 `dot` 累积误差（4 次乘加 → $\sim 4\varepsilon_{\text{mach}}$）及 clamp 操作带来的量级，**保守上界取 $|\Delta d_{\text{geo}}| \lesssim \sqrt{\varepsilon_{\text{mach}}} \approx 1.5\times 10^{-8}$（相对）**。
+
+**asin 回退分支**（$d > 1 - 10^{-14}$）：$\sqrt{1 - d^2}$ 的精度由 $1 - d^2$ 的有效位数决定。当 $d = 1 - \delta$（$\delta \in [0, 10^{-14}]$）：
+
+$$
+1 - d^2 = (1-d)(1+d) \approx 2\delta, \qquad
+\sqrt{1 - d^2} \approx \sqrt{2\delta} \in [0, \sqrt{2\cdot 10^{-14}}] \approx [0, 1.4\times 10^{-7}].
+$$
+
+此分支下距离 $d_{\text{geo}} \approx 2\sqrt{2\delta}$，其中 $\delta$ 本身只有 $\mathcal{O}(\varepsilon_{\text{mach}})$ 的绝对精度。故：
+
+$$
+\boxed{|\Delta d_{\text{geo}}|_{\text{asin 分支}} \lesssim 2\sqrt{2\varepsilon_{\text{mach}}} \approx 4\times 10^{-8}\ \text{绝对}, \quad 1\times 10^{-7}\ \text{相对}.}
+$$
+
+**这不是 bug，是物理上的精度下限**：近单位区域的旋转角度本身就落在 $\sqrt{\varepsilon_{\text{mach}}}$ 量级以内，任何度量都无法在纯 `double` 下分辨更小的差异。
+
+#### 5.2.4 退化契约
+
+| 输入                 | 期望                              | 实现策略 |
+|----------------------|-----------------------------------|----------|
+| $q_1 = q_2$          | $d = 0$                           | $|dot| = 1$ → asin(0) = 0 |
+| $q_1 = -q_2$         | $d = 0$（同一旋转）               | 反号归一后同上 |
+| $q_1 \perp q_2$（物理反向 180°）| $d = \pi$                | $|dot| = 0$ → $2\arccos(0) = \pi$，acos 分支稳定 |
+| 非单位 $q_i$         | 未定义                            | Debug 构建 `assert(|‖q‖²-1| < 1e-6)`；Release 信任调用方 |
+| $q_i = (0,0,0,0)$    | 未定义                            | Debug assert；Release 会产生 $|dot| = 0 \Rightarrow d = \pi/2$（无意义） |
+
+零四元数的过滤由上游（Maya 节点 attribute ingress）完成，本层不重复校验以保持热路径无分支。
+
+### 5.3 三角不等式（经验验证）
+
+理论：$SO(3)$ 是黎曼流形，$d_{\text{geo}}$ 为其唯一双不变度量，天然满足 $d(a,c)\le d(a,b)+d(b,c)$（严格不等式除非 $b$ 在 $ac$ 测地线上）。
+
+实现层面，我们以 **1000 组随机单位四元数三元组**、固定种子 `0xF5BFA1` 作数值回归护栏，允许 $10^{-12}$ 的累积浮点松弛。任何违规都指向实现 bug（单测 `TriangleInequality_1000Samples_FixedSeed`）。
+
+---
+
+## 6. 后续阶段占位
+
+- §6 将记录 Swing-Twist 分解的纯四元数代数证明（接入 `quaternion.hpp` 时）。
+- §7 将记录 Tikhonov 正则化正规方程 $(\mathbf{A}+\lambda\mathbf{I})\mathbf{w}=\mathbf{y}$ 的条件数改善估计（接入 `solver.hpp` 时）。
