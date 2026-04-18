@@ -151,7 +151,7 @@ TEST(QuaternionGeodesic, NearIdentityLinearInAngle) {
         std::sin(theta / 2.0) * 0.8,
         0.0);
     const Scalar d = quaternion_geodesic_distance(id, q_small);
-    EXPECT_NEAR(d, theta, 1e-12);  // asin fallback precision floor ~1e-7 relative.
+    EXPECT_NEAR(d, theta, 4e-8);  // asin fallback absolute bound ~4e-8 rad (see math_derivation.md §5.2.3).
 }
 
 TEST(QuaternionGeodesic, SymmetryHolds) {

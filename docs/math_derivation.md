@@ -221,8 +221,10 @@ $$
 此分支下距离 $d_{\text{geo}} \approx 2\sqrt{2\delta}$，其中 $\delta$ 本身只有 $\mathcal{O}(\varepsilon_{\text{mach}})$ 的绝对精度。故：
 
 $$
-\boxed{|\Delta d_{\text{geo}}|_{\text{asin 分支}} \lesssim 2\sqrt{2\varepsilon_{\text{mach}}} \approx 4\times 10^{-8}\ \text{绝对}, \quad 1\times 10^{-7}\ \text{相对}.}
+\boxed{|\Delta d_{\text{geo}}|_{\text{asin 分支}} \lesssim 2\sqrt{2\varepsilon_{\text{mach}}} \approx 4\times 10^{-8}\ \text{绝对（弧度）}.}
 $$
+
+> **相对误差用语的陷阱**：当 $\theta \to 0$ 时，$\Delta d / \theta$ **不受有界控制**（因分子有 $\sqrt{\varepsilon_{\text{mach}}}$ 量级的地板而分母趋零）。因此**单测容差必须使用绝对形式**（例如 `4e-8`），不得使用 `theta * R` 形式的相对容差。
 
 **这不是 bug，是物理上的精度下限**：近单位区域的旋转角度本身就落在 $\sqrt{\varepsilon_{\text{mach}}}$ 量级以内，任何度量都无法在纯 `double` 下分辨更小的差异。
 
