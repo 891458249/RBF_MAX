@@ -19,7 +19,7 @@
 **阶段**：Phase 1 (Mathematical Kernel)
 **切片**：01/09（阶段一共 9 个切片计划）
 **版本跃迁**：— → `0.1.0`
-**Commit**：_待回填_
+**Commit**：[`a8f0143`](https://github.com/891458249/RBF_MAX/commit/a8f0143)
 **会话来源**：Claude Opus 4 架构师协作
 
 ### 交付物
