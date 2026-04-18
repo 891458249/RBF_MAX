@@ -285,3 +285,36 @@ TEST(KernelMetadata, RequiresShapeParameterFlag) {
     EXPECT_TRUE (rbfmax::requires_shape_parameter(KernelType::kGaussian));
     EXPECT_TRUE (rbfmax::requires_shape_parameter(KernelType::kInverseMultiquadric));
 }
+
+// =============================================================================
+//  Negative-radius contract  (r < 0 is a caller-side violation; we lock in
+//  the observed behaviour so downstream code can rely on it).
+// =============================================================================
+
+TEST(KernelContract, NegativeRadiusOddExtension) {
+    // Linear / Cubic / Quintic are odd in r: φ(-r) = -φ(r).
+    EXPECT_DOUBLE_EQ(rbfmax::linear(-2.0),  -2.0);
+    EXPECT_DOUBLE_EQ(rbfmax::cubic(-2.0),   -8.0);
+    EXPECT_DOUBLE_EQ(rbfmax::quintic(-2.0), -32.0);
+}
+
+TEST(KernelContract, NegativeRadiusEvenExtension) {
+    // Gaussian / IMQ are even in r: φ(-r) = φ(r).
+    EXPECT_NEAR(rbfmax::gaussian(-1.0, 1.0),
+                rbfmax::gaussian(1.0, 1.0), kTightTol);
+    EXPECT_NEAR(rbfmax::inverse_multiquadric(-2.0, 1.5),
+                rbfmax::inverse_multiquadric(2.0, 1.5), kTightTol);
+}
+
+TEST(KernelContract, ThinPlateSplineNegativeRadiusClampsToZero) {
+    // r < 0 always lands in the r <= kLogEps branch → returns exactly 0.
+    // This is the aligned behaviour (v0.1.x had the header documenting NaN
+    // but the implementation already clamped — fixed to match reality).
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline(-1e-50), 0.0);
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline(-0.5),   0.0);
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline(-1.0),   0.0);
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline(-42.0),  0.0);
+
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline_derivative(-0.5), 0.0);
+    EXPECT_DOUBLE_EQ(rbfmax::thin_plate_spline_derivative(-1.0), 0.0);
+}

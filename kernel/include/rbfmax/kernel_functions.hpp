@@ -6,9 +6,14 @@
 // Contract
 // --------
 //   * All kernels map a non-negative radial distance r ∈ [0, +∞) to a scalar.
-//   * Passing a negative r is a caller-side contract violation: behaviour is
-//     unspecified but will never produce a segfault (we return std::nan for
-//     TPS, and the kernel's natural even/odd extension for the others).
+//     Passing a negative r is a caller-side contract violation (r stems from
+//     a norm and must not go negative).
+//   * Observed behaviour for negative r (stable across releases but not a
+//     guaranteed part of the API):
+//         Linear / Cubic / Quintic   -> natural odd extension  (φ(-r) = -φ(r)).
+//         Gaussian / IMQ             -> natural even extension (φ(-r) =  φ(r)).
+//         ThinPlateSpline            -> clamped to 0 via the r ≤ kLogEps branch.
+//     No kernel segfaults for negative r; NaN still propagates.
 //   * NaN input always produces NaN output (fail-fast, no silent masking).
 //   * Kernels that require a shape parameter (Gaussian, IMQ, MQ) take it
 //     as an explicit argument; non-shape kernels ignore it.
