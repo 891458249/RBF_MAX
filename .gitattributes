@@ -1,0 +1,74 @@
+# =============================================================================
+# .gitattributes — normalise line endings & flag binary assets.
+# -----------------------------------------------------------------------------
+# Rationale: this repo is built on Windows (MSVC) and Linux (GCC) — without
+# explicit eol rules `core.autocrlf=true` on Windows will pollute patches with
+# CRLF churn when the farm (Linux) touches the same file.
+# =============================================================================
+
+# Default: auto-detect text / binary; text files are normalised to LF on commit
+# and converted back to native on checkout (only affects working tree).
+*                text=auto eol=lf
+
+# --- Source code ------------------------------------------------------------
+*.cpp           text eol=lf diff=cpp
+*.hpp           text eol=lf diff=cpp
+*.h             text eol=lf diff=cpp
+*.c             text eol=lf diff=cpp
+*.cc            text eol=lf diff=cpp
+*.cu            text eol=lf diff=cpp
+*.py            text eol=lf diff=python
+*.cmake         text eol=lf
+CMakeLists.txt  text eol=lf
+
+# --- Docs & config ----------------------------------------------------------
+*.md            text eol=lf diff=markdown
+*.json          text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+*.ini           text eol=lf
+*.txt           text eol=lf
+
+# --- Windows-only scripts keep CRLF -----------------------------------------
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# --- Shell scripts always LF ------------------------------------------------
+*.sh            text eol=lf
+
+# --- Binary assets (no diff, no merge) --------------------------------------
+*.docx          binary
+*.xlsx          binary
+*.pptx          binary
+*.pdf           binary
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.bmp           binary
+*.tga           binary
+*.tif           binary
+*.tiff          binary
+*.psd           binary
+# Maya ASCII is technically text but is practically never merged line-by-line.
+*.ma            binary
+*.mb            binary
+*.mll           binary
+*.dll           binary
+*.so            binary
+*.dylib         binary
+*.lib           binary
+*.a             binary
+*.exe           binary
+*.pdb           binary
+*.zip           binary
+*.7z            binary
+*.tar           binary
+*.gz            binary
+
+# --- Linguist overrides (GitHub stats) --------------------------------------
+# Treat vendored Eigen / gtest fetches as non-authored code if they ever land
+# in-tree; currently they live under build/_deps/ which is .gitignored.

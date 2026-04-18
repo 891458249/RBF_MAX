@@ -1,0 +1,78 @@
+# =============================================================================
+# RBF_MAX .gitignore
+# =============================================================================
+
+# Build artifacts ------------------------------------------------------------
+build/
+build-*/
+out/
+cmake-build-*/
+_deps/
+
+# CMake ----------------------------------------------------------------------
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+Testing/
+compile_commands.json
+
+# IDE ------------------------------------------------------------------------
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+*.xcodeproj/
+*.xcworkspace/
+
+# Compiled objects -----------------------------------------------------------
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.mll        # Maya plugin binary
+*.mod
+
+# Python ---------------------------------------------------------------------
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Logs / Coverage ------------------------------------------------------------
+*.log
+*.gcov
+*.gcda
+*.gcno
+coverage/
+*.profraw
+
+# OS -------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local overrides ------------------------------------------------------------
+/local.cmake
+/CMakeUserPresets.json
+
+# Project-specific -----------------------------------------------------------
+.unpacked/
+.unpacked_text.txt
+.remember/
+.claude/
