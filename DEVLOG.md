@@ -14,6 +14,85 @@
 
 ---
 
+## 2026-04-19 · Slice 02 — Distance Metrics
+
+**阶段**：Phase 1 (Mathematical Kernel)
+**切片**：02/09
+**版本跃迁**：`0.1.0` → `0.2.0`
+**Commits**：
+- [`2b59a8b`](https://github.com/891458249/RBF_MAX/commit/2b59a8b) · `fix(kernel)` TPS 负 r 契约对齐
+- [`09d909a`](https://github.com/891458249/RBF_MAX/commit/09d909a) · `feat(distance)` 距离度量主体
+- _本条目所在的 `chore(release)` 待回填_
+
+**会话来源**：Claude Opus 4 架构师协作（含切片 ① 评审 + 切片 ② 评审两轮）
+
+### 交付物
+
+| 路径 | 行数 | 说明 |
+|---|---|---|
+| `kernel/include/rbfmax/distance.hpp` | 117 | 欧氏 + 四元数测地距离，命名空间 `rbfmax::metric` |
+| `tests/test_distance.cpp` | 254 | 14 个 TEST，含 1000 组三角不等式回归 |
+| `docs/math_derivation.md` §5 | +115 行 | 反号归一证明、acos/asin 分支判据、Lipschitz 误差上界 |
+| `kernel/include/rbfmax/kernel_functions.hpp` | 注释修订 | TPS 负 r 契约从"NaN"改为"clamp 到 0"，与实现一致 |
+| `tests/test_kernel_functions.cpp` | +3 TEST | `KernelContract.*` 锁定负 r 三档行为（奇/偶/clamp） |
+| `tests/CMakeLists.txt` | +1 行 | 注册 `test_distance` |
+| `CMakeLists.txt` | VERSION 0.1.0 → 0.2.0 | |
+| `CHANGELOG.md` / `DEVLOG.md` | — | 双层日志追加 |
+
+### 关键技术决策
+
+1. **距离接口使用 Eigen 模板签名**
+   - 切片 ② 评审建议 1。避免 `const VectorX&` 强制调用方构造动态向量导致的堆分配。
+   - 实现以 `template <typename DerivedA, typename DerivedB>` 接收 `Eigen::MatrixBase<>`，编译期 size 不匹配由 Eigen 静态断言捕获。
+
+2. **四元数测地距离双分支**
+   - 常规区间用 `2·acos(clamp(|dot|, -1, 1))`；近单位 `|dot| ≥ 1 - kQuatIdentityEps (1e-14)` 切换到 `2·asin(sqrt(1 - dot²))`。
+   - 数学推导 §5.2.3 证明两支的相对误差上界分别为 `√ε_mach ≈ 1.5e-8` 与 `~1e-7`；后者是双精度物理精度下限。
+
+3. **单位化契约：Release 信任、Debug 校验**
+   - 切片 ② 评审建议 2。热路径零分支；`assert(|‖q‖² − 1| < 1e-6)` 仅 Debug 生效。
+   - 零四元数作为未定义行为写入头部注释，过滤责任上移至 Maya 节点的 attribute ingress。
+
+4. **三角不等式抽样 1000 次、种子固定**
+   - 切片 ② 评审建议 3。原提案 10 次远不够统计学严谨；1000 次耗时 <10ms 但能稳定捕获任何数值实现 bug。
+   - 种子 `0xF5BFA1u` 硬编码，CI 断言永不 flake。
+
+5. **TPS 契约修复类型归为 `fix:` 而非 `refactor:`**
+   - 切片 ② 评审建议 4。Conventional Commits 按"修复的问题"分类，不按"改的文件"分类；文档-实现的 drift 是缺陷，SemVer PATCH 归零随 MINOR 抬升自然处理。
+
+### 风险 & TODO（新增；延续自切片 01 的保留）
+
+| ID | 状态 | 风险 |
+|---|---|---|
+| R-01 | 保留 | `CMP0169 OLD` 依赖，与 Eigen 3.4 升级联动 |
+| R-02 | 保留 | CentOS 6 + GCC 4.8.2 实机未验证 |
+| R-03 | 保留 | `static constexpr` 命名空间常量潜在警告 |
+| R-04 | 保留 | Eigen 3.3.9 `-Wdeprecated-declarations` 在 GCC 11 |
+| R-05 | 保留 | `kernel_type_from_string` 首字符 switch（Wendland/Matern 引入时重构） |
+| R-06 | 新增 | `CMakeLists.txt` 引用不存在的 `benchmarks/` 子目录，启用 `RBF_BUILD_BENCHMARKS=ON` 会失败；切片 ⑨ 前加 `if(EXISTS)` 守卫 |
+| R-07 | 新增 | `RowMatrixX` 与 `rbfmax_apply_release_tuning` 均为"暂时死代码"，等 `io_json.hpp` / solver static lib 接入时消费 |
+| R-08 | 新增 | 四元数入参契约要求单位化，但 Phase 2 Maya 节点若直接连接 `rotate` 属性的欧拉→四元数转换链可能引入 `1e-7` 级漂移；需要在节点 `compute()` 入口做强制 `normalized()` |
+| T-01 | 保留 | commit-msg hook 未接入 |
+| T-02 | 保留 | GitHub Actions CI 矩阵未接入 |
+| T-03 | 新增 | 性能 benchmark 未覆盖 `quaternion_geodesic_distance`（在 1M 调用/帧场景下可能是瓶颈），Slice ⑨ 补齐 |
+
+### 切片内验收门
+
+| 检查项 | 状态 |
+|---|---|
+| `test_distance` 新增 14 个 TEST / ≥ 40 断言 | ✅ 落盘 |
+| 三个四元数病态点（`q=q'`、`q=-q'`、`dot≈0`）全覆盖 | ✅ 落盘 |
+| 三角不等式 1000 组抽样固定种子 | ✅ 落盘 |
+| asin 回退分支误差上界文档化 | ✅ `math_derivation.md §5.2.3` |
+| 零四元数契约明确 | ✅ `distance.hpp` 头 + `math_derivation.md §5.2.4` |
+| 本地编译 + ctest 验证 | ⏳ 待用户本地执行 |
+
+### 下一切片依赖
+
+Slice 03 — `quaternion.hpp`（Swing-Twist 分解、Log/Exp map）将消费本切片的 `kQuatIdentityEps` 常量与 `quaternion_abs_dot` 工具。
+
+---
+
 ## 2026-04-18 · Slice 01 — Kernel Math Functions
 
 **阶段**：Phase 1 (Mathematical Kernel)

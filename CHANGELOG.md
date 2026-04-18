@@ -14,6 +14,50 @@ _尚无未发布变更。_
 
 ---
 
+## [0.2.0] — 2026-04-19
+
+**Phase 1 · Slice 02 — 距离度量（Distance Metrics）**
+
+第二个切片。新增**欧氏距离**与**四元数测地距离**两个模块，服务于后续 KD-Tree 近邻查询与姿态空间 RBF 插值的度量需求。仍仅为纯 C++11 内核层，尚未接入 Maya。
+
+### 新增 (Added)
+
+- **`rbfmax/distance.hpp`**（header-only，命名空间 `rbfmax::metric`）：
+  - `squared_distance(a, b)`：基于 `Eigen::MatrixBase` 模板的平方欧氏距离，KD-Tree 最近邻查询的默认度量；无 `sqrt`。
+  - `distance(a, b)`：欧氏距离，通用场景。
+  - `quaternion_abs_dot(q1, q2)`：反号归一后的 `|q1·q2|`，直接喂给 cosine-similarity 型核函数。
+  - `quaternion_geodesic_distance(q1, q2)`：$SO(3)$ 上的测地距离 `2·acos(|q1·q2|) ∈ [0, π]`，带双分支数值保护（常规 `acos` + 近单位 `asin` 半角回退）。
+- **测试套件** `tests/test_distance.cpp`：
+  - 欧氏距离在 `Vector3` / `VectorX` / `Eigen::Map<>` 三种载体下零成本互通；
+  - 四元数退化边界（恒等、反号、90°、180°、近单位 $\theta \approx 10^{-7}$、对称性、退化等价）；
+  - **1000 组随机三元组三角不等式回归**（固定种子 `0xF5BFA1`，可复现）；
+  - 500 组随机双元组 `[0, π]` 值域守护。
+- **数学推导** `docs/math_derivation.md` §5：
+  - 反号归一 `|q1·(-q2)| = |q1·q2|` 证明；
+  - 近单位 `acos` 灾难性相消的 Taylor 展开分析与 `asin` 半角替代；
+  - Lipschitz 误差上界：常规分支 `|Δd| ≲ √ε_mach ≈ 1.5e-8`，`asin` 回退分支 `|Δd| ≲ 1e-7`（双精度物理精度下限，非缺陷）；
+  - 退化输入契约表（含零四元数 Debug assert 策略）。
+
+### 修复 (Fixed)
+
+- **TPS 契约对齐**：v0.1.0 头部注释声明 `thin_plate_spline(r<0)` 返回 NaN，但实现的 `r ≤ kLogEps` 分支早已 clamp 到 0。本次修正头部文档使其与实现一致（保留 clamp 行为，因其对"浮点抵消产生的微小负值"更鲁棒），并新增 `KernelContract.*` 三个单测锁定 Linear/Cubic/Quintic 的奇延拓、Gaussian/IMQ 的偶延拓以及 TPS 的 clamp。
+
+### 契约 (Contracts)
+
+- 四元数测地距离**要求**输入为单位四元数，Debug 构建以 `assert(|‖q‖² − 1| < 1e-6)` 校验；Release 信任调用方以保热路径分支最少。零四元数为未定义行为。
+
+### 工程 (Build)
+
+- `CMakeLists.txt` 项目版本号 `0.1.0 → 0.2.0`。
+- `tests/CMakeLists.txt` 注册 `test_distance` 测试目标。
+
+### 已知限制
+
+- 仍**未**接入 CI 矩阵（本地 MSVC 2022 验证仍在调用方执行）。
+- `quaternion.hpp`（Swing-Twist 分解、Log/Exp map）计划在 Slice 03 落盘。
+
+---
+
 ## [0.1.0] — 2026-04-19
 
 **Phase 1 · Slice 01 — 数学内核首切片（Kernel Functions）**
@@ -67,5 +111,6 @@ _尚无未发布变更。_
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/891458249/RBF_MAX/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/891458249/RBF_MAX/releases/tag/v0.1.0
