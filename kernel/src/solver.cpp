@@ -93,6 +93,27 @@ Scalar evaluate_monomial(const MonomialIndex& m,
     return result;
 }
 
+/// Slice 06 helper — write the polynomial-tail row vector P_α(x) into a
+/// caller-supplied output buffer.  Mirrors the column producer in
+/// build_polynomial_matrix but for a single query point.  `out` must be
+/// pre-sized to the basis cardinality; when sizes match no allocation
+/// occurs.  The basis enumeration itself still allocates a small
+/// std::vector<MonomialIndex> — a once-per-call cost (not per inner loop)
+/// that Slice 09 will revisit if benchmarks demand it.
+void build_polynomial_row(const VectorX& x, int poly_degree,
+                          VectorX& out) noexcept {
+    if (poly_degree < 0 || out.size() == 0) {
+        return;
+    }
+    const auto basis = generate_monomial_basis(static_cast<int>(x.size()),
+                                               poly_degree);
+    const Index Q = static_cast<Index>(basis.size());
+    eigen_assert(out.size() == Q && "build_polynomial_row: size mismatch");
+    for (Index a = 0; a < Q; ++a) {
+        out(a) = evaluate_monomial(basis[static_cast<std::size_t>(a)], x);
+    }
+}
+
 // =============================================================================
 //  Input validation
 // =============================================================================
@@ -400,6 +421,19 @@ FitResult do_fit(const Eigen::Ref<const MatrixX>& centers,
 }  // namespace
 
 // =============================================================================
+//  ScratchPool — pre-allocated buffers (Slice 06)
+// =============================================================================
+
+ScratchPool::ScratchPool(Index dim, Index n_centers, Index poly_cols) noexcept
+    : query_vec(dim),
+      kernel_vals(n_centers),
+      diff_vec(dim),
+      poly_vec(poly_cols) {
+    // Eigen VectorX resize at construction; subsequent predict_with_pool
+    // writes into these without allocating provided shapes match.
+}
+
+// =============================================================================
 //  Public API
 // =============================================================================
 
@@ -464,8 +498,15 @@ FitResult fit(const Eigen::Ref<const MatrixX>& centers,
     return do_fit(centers, targets, options, selected);
 }
 
-Scalar predict_scalar(const FitResult& fr,
-                      const Eigen::Ref<const VectorX>& x) noexcept {
+// -----------------------------------------------------------------------------
+//  Pool-explicit overloads — the canonical compute path since Slice 06.
+//  predict / predict_scalar / predict_batch all delegate here so that the
+//  arithmetic path is single-sourced (P4/P5 bit-identity property).
+// -----------------------------------------------------------------------------
+
+Scalar predict_scalar_with_pool(const FitResult& fr,
+                                const Eigen::Ref<const VectorX>& x,
+                                ScratchPool& pool) noexcept {
     if (fr.status != FitStatus::OK) {
         return std::numeric_limits<Scalar>::quiet_NaN();
     }
@@ -473,23 +514,89 @@ Scalar predict_scalar(const FitResult& fr,
         return Scalar(0);
     }
     eigen_assert(x.size() == fr.centers.cols());
+    eigen_assert(pool.dim() == fr.centers.cols() &&
+                 "ScratchPool dim does not match FitResult");
+    eigen_assert(pool.n_centers() == fr.centers.rows() &&
+                 "ScratchPool n_centers does not match FitResult");
     try {
         const Index N = fr.centers.rows();
+        pool.query_vec = x;
         Scalar acc = Scalar(0);
         for (Index j = 0; j < N; ++j) {
-            const Scalar r = std::sqrt(
-                metric::squared_distance(x.transpose(), fr.centers.row(j)));
-            acc += fr.weights(j, 0) * evaluate_kernel(fr.kernel, r);
+            pool.diff_vec = pool.query_vec - fr.centers.row(j).transpose();
+            const Scalar r = pool.diff_vec.norm();
+            const Scalar k = evaluate_kernel(fr.kernel, r);
+            pool.kernel_vals(j) = k;
+            acc += fr.weights(j, 0) * k;
         }
         if (fr.poly_degree >= 0 && fr.poly_coeffs.rows() > 0) {
-            const auto basis = generate_monomial_basis(
-                static_cast<int>(fr.centers.cols()), fr.poly_degree);
-            for (std::size_t a = 0; a < basis.size(); ++a) {
-                acc += fr.poly_coeffs(static_cast<Index>(a), 0) *
-                       evaluate_monomial(basis[a], x);
+            eigen_assert(pool.poly_cols() == fr.poly_coeffs.rows() &&
+                         "ScratchPool poly_cols does not match FitResult");
+            build_polynomial_row(pool.query_vec, fr.poly_degree,
+                                 pool.poly_vec);
+            for (Index a = 0; a < pool.poly_vec.size(); ++a) {
+                acc += fr.poly_coeffs(a, 0) * pool.poly_vec(a);
             }
         }
         return acc;
+    } catch (...) {
+        return std::numeric_limits<Scalar>::quiet_NaN();
+    }
+}
+
+VectorX predict_with_pool(const FitResult& fr,
+                          const Eigen::Ref<const VectorX>& x,
+                          ScratchPool& pool) noexcept {
+    if (fr.status != FitStatus::OK) {
+        return VectorX();
+    }
+    const Index M = fr.weights.cols();
+    if (M == 0) {
+        return VectorX(0);
+    }
+    eigen_assert(x.size() == fr.centers.cols());
+    eigen_assert(pool.dim() == fr.centers.cols() &&
+                 "ScratchPool dim does not match FitResult");
+    eigen_assert(pool.n_centers() == fr.centers.rows() &&
+                 "ScratchPool n_centers does not match FitResult");
+    try {
+        const Index N = fr.centers.rows();
+        pool.query_vec = x;
+        for (Index j = 0; j < N; ++j) {
+            pool.diff_vec = pool.query_vec - fr.centers.row(j).transpose();
+            const Scalar r = pool.diff_vec.norm();
+            pool.kernel_vals(j) = evaluate_kernel(fr.kernel, r);
+        }
+        VectorX out = fr.weights.transpose() * pool.kernel_vals;  // M-vector
+        if (fr.poly_degree >= 0 && fr.poly_coeffs.rows() > 0) {
+            eigen_assert(pool.poly_cols() == fr.poly_coeffs.rows() &&
+                         "ScratchPool poly_cols does not match FitResult");
+            build_polynomial_row(pool.query_vec, fr.poly_degree,
+                                 pool.poly_vec);
+            out.noalias() += fr.poly_coeffs.transpose() * pool.poly_vec;
+        }
+        return out;
+    } catch (...) {
+        return VectorX();
+    }
+}
+
+// -----------------------------------------------------------------------------
+//  Convenience overloads — internally allocate a temporary pool and delegate.
+//  Slice 06 unifies the compute path so predict()/predict_scalar() and
+//  predict_with_pool()/predict_scalar_with_pool() are bit-identical for the
+//  same FitResult+query pair.
+// -----------------------------------------------------------------------------
+
+Scalar predict_scalar(const FitResult& fr,
+                      const Eigen::Ref<const VectorX>& x) noexcept {
+    if (fr.status != FitStatus::OK) {
+        return std::numeric_limits<Scalar>::quiet_NaN();
+    }
+    try {
+        ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                         fr.poly_coeffs.rows());
+        return predict_scalar_with_pool(fr, x, pool);
     } catch (...) {
         return std::numeric_limits<Scalar>::quiet_NaN();
     }
@@ -500,30 +607,10 @@ VectorX predict(const FitResult& fr,
     if (fr.status != FitStatus::OK) {
         return VectorX();
     }
-    const Index M = fr.weights.cols();
-    if (M == 0) {
-        return VectorX(0);
-    }
-    eigen_assert(x.size() == fr.centers.cols());
     try {
-        const Index N = fr.centers.rows();
-        VectorX kvec(N);
-        for (Index j = 0; j < N; ++j) {
-            const Scalar r = std::sqrt(
-                metric::squared_distance(x.transpose(), fr.centers.row(j)));
-            kvec(j) = evaluate_kernel(fr.kernel, r);
-        }
-        VectorX out = fr.weights.transpose() * kvec;  // M-vector
-        if (fr.poly_degree >= 0 && fr.poly_coeffs.rows() > 0) {
-            const auto basis = generate_monomial_basis(
-                static_cast<int>(fr.centers.cols()), fr.poly_degree);
-            VectorX pvec(static_cast<Index>(basis.size()));
-            for (std::size_t a = 0; a < basis.size(); ++a) {
-                pvec(static_cast<Index>(a)) = evaluate_monomial(basis[a], x);
-            }
-            out.noalias() += fr.poly_coeffs.transpose() * pvec;
-        }
-        return out;
+        ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                         fr.poly_coeffs.rows());
+        return predict_with_pool(fr, x, pool);
     } catch (...) {
         return VectorX();
     }
@@ -541,9 +628,11 @@ MatrixX predict_batch(const FitResult& fr,
     }
     try {
         MatrixX out(K, M);
+        ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                         fr.poly_coeffs.rows());
         for (Index i = 0; i < K; ++i) {
-            VectorX q = X.row(i).transpose();
-            out.row(i) = predict(fr, q).transpose();
+            VectorX y = predict_with_pool(fr, X.row(i).transpose(), pool);
+            out.row(i) = y.transpose();
         }
         return out;
     } catch (...) {
