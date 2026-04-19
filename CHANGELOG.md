@@ -14,6 +14,18 @@ _尚无未发布变更。_
 
 ---
 
+## [0.2.1] — 2026-04-19
+
+### Added
+- Continuous integration baseline via GitHub Actions: three-job matrix
+  covering Windows MSVC Release + Debug and Ubuntu GCC 11 Release.
+- FetchContent dependency cache keyed on FetchDependencies.cmake hash.
+
+### Changed
+- No API / ABI changes. Kernel, distance, and test contracts unchanged.
+
+---
+
 ## [0.2.0] — 2026-04-19
 
 **Phase 1 · Slice 02 — 距离度量（Distance Metrics）**
@@ -111,6 +123,7 @@ _尚无未发布变更。_
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/891458249/RBF_MAX/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/891458249/RBF_MAX/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/891458249/RBF_MAX/releases/tag/v0.1.0
