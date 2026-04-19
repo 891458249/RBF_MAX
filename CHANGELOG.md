@@ -14,6 +14,54 @@ _尚无未发布变更。_
 
 ---
 
+## [0.6.0] — 2026-04-20
+
+**Phase 1 · Slice 06 — ScratchPool 零分配 predict（Breathing Slice）**
+
+呼吸切片，纯工程优化、无新数学。引入 `rbfmax::solver::ScratchPool` 为
+predict 热路径提供预分配缓冲，消除内层核函数评估循环里的堆分配。
+为 Maya 60fps `compute()` 做准备：单帧 predict 调用不应给 allocator
+施压。
+
+### 新增 (Added)
+
+- **`rbfmax::solver::ScratchPool`**：预分配四个 Eigen `VectorX` 成员
+  （`query_vec`、`kernel_vals`、`diff_vec`、`poly_vec`），构造时一次
+  完成 sizing；`predict_with_pool` 写入这些缓冲不再分配。Move-only
+  （拷贝构造/赋值已 `delete`），编译期 `static_assert` 验证。
+- **`predict_with_pool(fr, x, pool)`** 与 **`predict_scalar_with_pool(...)`**
+  两个新重载：暴露调用方持有 pool 生命期的零分配热路径，目标场景为
+  Maya 节点的 per-frame `compute()`。
+- 9 个新测试块（H 类别），随机种子 `0xF5BFA5u`（继 Slice 05 的
+  `0xF5BFA4u` 之后）：覆盖构造、move 语义、与 non-pool 重载的逐 bit
+  等价、N=500/K=500/M=3 大批量稳定性、零多项式尾、copy-deleted 静态
+  断言。
+
+### 变更 (Changed)
+
+- **`predict_batch`** 内部现在创建一个 pool 并跨循环复用，per-query
+  分配从 O(3N) 降至 O(1) 摊销。**公开签名未变**。
+- **`predict`** 与 **`predict_scalar`** 现在通过内部临时 pool 委托到
+  pool 版本实现，统一计算路径。算术与 v0.5.0 逐 bit 等价（H4/H5
+  测试用 1e-14 容差锁定该不变量）。
+
+### 不变 (Unchanged)
+
+- Slice 01–05 全部 API 二进制兼容。
+- 公开签名（`fit`、`predict`、`predict_scalar`、`predict_batch`、
+  `FitOptions`、`FitResult`、`SolverPath`、`FitStatus`、`kLambdaMin`、
+  `kLambdaAuto`）零变化。
+
+### 已知限制
+
+- 真正的零分配验证（per-iteration allocation count）推迟至 Slice 09
+  google-benchmark 套件；Slice 06 测试只验证功能等价。
+- `predict` / `predict_with_pool` 仍按值返回 `VectorX`，每次查询有 1
+  次接口性分配。彻底 O(1) per-query 需要 out-parameter API，预留给
+  Slice 07（`RBFInterpolator` 端到端类）。
+
+---
+
 ## [0.5.0] — 2026-04-19
 
 **Phase 1 · Slice 05 — RBF 求解器（RBF Solver）**
@@ -244,7 +292,8 @@ Phase 1 最大切片，落地项目首个**非 header-only 模块**与首个 STA
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/891458249/RBF_MAX/compare/v0.2.2...v0.3.0
