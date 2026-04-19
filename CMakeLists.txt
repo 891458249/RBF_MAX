@@ -9,7 +9,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(rbfmax
-    VERSION     0.4.0
+    VERSION     0.5.0
     DESCRIPTION "Industrial-grade RBF interpolation kernel and Maya plug-in"
     LANGUAGES   CXX
 )
@@ -69,6 +69,35 @@ target_compile_features(rbfmax_kernel INTERFACE cxx_std_11)
 # Export the project version as a compile definition so the kernel can
 # embed it into serialized assets.
 target_compile_definitions(rbfmax_kernel INTERFACE
+    RBFMAX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    RBFMAX_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    RBFMAX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
+)
+
+# --- Solver library (non-header-only; first .cpp) ---------------------------
+# Slice 05: introduces the first compiled translation unit. Built as STATIC
+# so downstream Maya plug-in DLLs can link without exposing rbfmax internals
+# in their export tables.
+add_library(rbfmax_solver STATIC
+    kernel/src/solver.cpp
+)
+add_library(rbfmax::solver ALIAS rbfmax_solver)
+
+target_include_directories(rbfmax_solver PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/kernel/include>"
+    "$<INSTALL_INTERFACE:include>"
+)
+
+target_link_libraries(rbfmax_solver PUBLIC
+    rbfmax::kernel
+)
+
+target_compile_features(rbfmax_solver PUBLIC cxx_std_11)
+
+rbfmax_apply_warnings(rbfmax_solver)
+rbfmax_apply_release_tuning(rbfmax_solver)
+
+target_compile_definitions(rbfmax_solver PUBLIC
     RBFMAX_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
     RBFMAX_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     RBFMAX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
