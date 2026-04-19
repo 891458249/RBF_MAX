@@ -22,6 +22,8 @@
 #include <cmath>
 #include <cstdint>
 #include <random>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include <Eigen/Core>
@@ -687,4 +689,188 @@ TEST(EndToEnd, ZeroWeightsForZeroTargets) {
 
     VectorX q = C.row(0).transpose();
     EXPECT_NEAR(predict_scalar(fr, q), 0.0, 1e-12);
+}
+
+// =============================================================================
+//  H — ScratchPool zero-alloc predict (Slice 06, 9 tests; P6 deferred)
+// =============================================================================
+//
+// Random seed sequential after Slice 05 (kSeed = 0xF5BFA4u).  P6
+// (per-iteration zero-allocation instrumentation) intentionally skipped;
+// real performance validation deferred to Slice 09 benchmarks.
+//
+namespace {
+constexpr std::uint32_t kSeedPool = 0xF5BFA5u;
+
+using rbfmax::solver::ScratchPool;
+using rbfmax::solver::predict_scalar_with_pool;
+using rbfmax::solver::predict_with_pool;
+}  // namespace
+
+TEST(ScratchPool, ConstructionSetsSizes) {
+    ScratchPool pool(3, 50, 4);
+    EXPECT_EQ(pool.dim(), 3);
+    EXPECT_EQ(pool.n_centers(), 50);
+    EXPECT_EQ(pool.poly_cols(), 4);
+    EXPECT_EQ(pool.query_vec.size(), 3);
+    EXPECT_EQ(pool.kernel_vals.size(), 50);
+    EXPECT_EQ(pool.diff_vec.size(), 3);
+    EXPECT_EQ(pool.poly_vec.size(), 4);
+}
+
+TEST(ScratchPool, MoveConstructionTransfersBuffers) {
+    ScratchPool a(3, 50, 0);
+    a.query_vec.setConstant(7.0);
+    ScratchPool b(std::move(a));
+    EXPECT_EQ(b.dim(), 3);
+    EXPECT_EQ(b.n_centers(), 50);
+    EXPECT_EQ(b.poly_cols(), 0);
+    EXPECT_DOUBLE_EQ(b.query_vec(0), 7.0);
+    // Eigen move semantics: source buffers are emptied (size 0) on move.
+    EXPECT_EQ(a.query_vec.size(), 0);
+    EXPECT_EQ(a.kernel_vals.size(), 0);
+    EXPECT_EQ(a.diff_vec.size(), 0);
+}
+
+TEST(ScratchPool, MoveAssignmentWorks) {
+    ScratchPool a(2, 10, 1);
+    a.kernel_vals.setConstant(3.0);
+    ScratchPool b(5, 5, 5);
+    b = std::move(a);
+    EXPECT_EQ(b.dim(), 2);
+    EXPECT_EQ(b.n_centers(), 10);
+    EXPECT_EQ(b.poly_cols(), 1);
+    EXPECT_DOUBLE_EQ(b.kernel_vals(0), 3.0);
+}
+
+TEST(PredictWithPool, MatchesRegularPredict) {
+    std::mt19937 rng(kSeedPool);
+    const Index N = 25, D = 3, M = 2;
+    MatrixX C = random_matrix(rng, N, D);
+    MatrixX Y = random_matrix(rng, N, M);
+
+    FitOptions opt(KernelParams{KernelType::kGaussian, 1.0});
+    FitResult fr = rbfmax::solver::fit(C, Y, opt, 1e-6);
+    ASSERT_EQ(fr.status, FitStatus::OK);
+
+    ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                     fr.poly_coeffs.rows());
+    MatrixX X = random_matrix(rng, 20, D);
+    for (Index i = 0; i < X.rows(); ++i) {
+        VectorX q = X.row(i).transpose();
+        VectorX a = predict(fr, q);
+        VectorX b = predict_with_pool(fr, q, pool);
+        ASSERT_EQ(a.size(), b.size());
+        for (Index k = 0; k < a.size(); ++k) {
+            EXPECT_NEAR(a(k), b(k), 1e-14)
+                << "row=" << i << " col=" << k;
+        }
+    }
+}
+
+TEST(PredictScalarWithPool, MatchesPredictScalar) {
+    std::mt19937 rng(kSeedPool);
+    const Index N = 20, D = 3;
+    MatrixX C = random_matrix(rng, N, D);
+    MatrixX Y = random_matrix(rng, N, 1);
+
+    FitOptions opt(KernelParams{KernelType::kGaussian, 1.0});
+    FitResult fr = rbfmax::solver::fit(C, Y, opt, 1e-6);
+    ASSERT_EQ(fr.status, FitStatus::OK);
+
+    ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                     fr.poly_coeffs.rows());
+    MatrixX X = random_matrix(rng, 20, D);
+    for (Index i = 0; i < X.rows(); ++i) {
+        VectorX q = X.row(i).transpose();
+        const Scalar a = predict_scalar(fr, q);
+        const Scalar b = predict_scalar_with_pool(fr, q, pool);
+        EXPECT_NEAR(a, b, 1e-14) << "row=" << i;
+    }
+}
+
+// P6 — zero-allocation instrumentation intentionally skipped (deferred to
+// Slice 09 google-benchmark suite).
+
+TEST(PredictBatch, InternalPoolReuseMatchesPointwise) {
+    std::mt19937 rng(kSeedPool);
+    const Index N = 30, D = 3, M = 2;
+    const Index K = 100;
+    MatrixX C = random_matrix(rng, N, D);
+    MatrixX Y = random_matrix(rng, N, M);
+    MatrixX X = random_matrix(rng, K, D);
+
+    FitOptions opt(KernelParams{KernelType::kGaussian, 1.0});
+    FitResult fr = rbfmax::solver::fit(C, Y, opt, 1e-6);
+    ASSERT_EQ(fr.status, FitStatus::OK);
+
+    MatrixX batched = predict_batch(fr, X);
+    ASSERT_EQ(batched.rows(), K);
+    ASSERT_EQ(batched.cols(), M);
+
+    ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                     fr.poly_coeffs.rows());
+    for (Index i = 0; i < K; ++i) {
+        VectorX q = X.row(i).transpose();
+        VectorX y = predict_with_pool(fr, q, pool);
+        for (Index k = 0; k < M; ++k) {
+            EXPECT_NEAR(batched(i, k), y(k), 1e-14)
+                << "row=" << i << " col=" << k;
+        }
+    }
+}
+
+TEST(ScratchPool, ZeroPolyColsConstructsValidPool) {
+    std::mt19937 rng(kSeedPool);
+    const Index N = 12, D = 3;
+    MatrixX C = random_matrix(rng, N, D);
+    MatrixX Y = random_matrix(rng, N, 1);
+
+    // Gaussian kernel + poly_degree = -1 ⇒ no polynomial tail.
+    FitOptions opt(KernelParams{KernelType::kGaussian, 1.0}, -1);
+    FitResult fr = rbfmax::solver::fit(C, Y, opt, 1e-6);
+    ASSERT_EQ(fr.status, FitStatus::OK);
+    ASSERT_EQ(fr.poly_coeffs.rows(), 0);
+
+    ScratchPool pool(D, N, 0);
+    EXPECT_EQ(pool.poly_cols(), 0);
+    EXPECT_EQ(pool.poly_vec.size(), 0);
+
+    VectorX q = C.row(0).transpose();
+    VectorX y = predict_with_pool(fr, q, pool);
+    ASSERT_EQ(y.size(), 1);
+    EXPECT_TRUE(std::isfinite(y(0)));
+}
+
+TEST(PredictWithPool, LargeBatchDoesNotCrash) {
+    std::mt19937 rng(kSeedPool);
+    const Index N = 500, D = 3, M = 3;
+    const Index K = 500;
+    MatrixX C = random_matrix(rng, N, D);
+    MatrixX Y = random_matrix(rng, N, M);
+
+    FitOptions opt(KernelParams{KernelType::kGaussian, 1.0});
+    FitResult fr = rbfmax::solver::fit(C, Y, opt, 1e-6);
+    ASSERT_EQ(fr.status, FitStatus::OK);
+
+    ScratchPool pool(fr.centers.cols(), fr.centers.rows(),
+                     fr.poly_coeffs.rows());
+    MatrixX X = random_matrix(rng, K, D);
+    for (Index i = 0; i < K; ++i) {
+        VectorX q = X.row(i).transpose();
+        VectorX y = predict_with_pool(fr, q, pool);
+        ASSERT_EQ(y.size(), M);
+        for (Index k = 0; k < M; ++k) {
+            ASSERT_TRUE(std::isfinite(y(k)))
+                << "non-finite at row=" << i << " col=" << k;
+        }
+    }
+}
+
+TEST(ScratchPool, CopyIsDeleted) {
+    static_assert(!std::is_copy_constructible<ScratchPool>::value,
+                  "ScratchPool must be non-copy-constructible");
+    static_assert(!std::is_copy_assignable<ScratchPool>::value,
+                  "ScratchPool must be non-copy-assignable");
+    SUCCEED();
 }

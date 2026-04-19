@@ -135,6 +135,51 @@ struct FitResult {
 };
 
 // -----------------------------------------------------------------------------
+//  ScratchPool — pre-allocated buffers for the predict hot path
+// -----------------------------------------------------------------------------
+
+/// Scratch buffer pool for the predict hot path.
+///
+/// Pre-allocates all transient Eigen vectors used by predict so that
+/// `predict_with_pool` executes zero heap allocations in its inner kernel
+/// evaluation loop.  Designed for Maya 60fps compute() where per-frame
+/// predict calls must not stress the allocator.
+///
+/// Thread-safety contract
+/// ----------------------
+/// ScratchPool is NOT thread-safe.  Each thread or TBB task must own its
+/// own pool instance.  Concurrent predict_with_pool calls on the same pool
+/// are a data race.
+///
+/// Lifetime contract
+/// -----------------
+/// The pool is independent of FitResult.  Size it to a FitResult's
+/// centers/dim/poly_cols, reuse across predict calls for that FitResult.
+/// Resize (construct a new pool) if you switch to a FitResult of different
+/// shape.  Debug builds verify shape compatibility via eigen_assert.
+class ScratchPool {
+public:
+    explicit ScratchPool(Index dim,
+                         Index n_centers,
+                         Index poly_cols = 0) noexcept;
+
+    Index dim()       const noexcept { return query_vec.size(); }
+    Index n_centers() const noexcept { return kernel_vals.size(); }
+    Index poly_cols() const noexcept { return poly_vec.size(); }
+
+    ScratchPool(const ScratchPool&)            = delete;
+    ScratchPool& operator=(const ScratchPool&) = delete;
+    ScratchPool(ScratchPool&&) noexcept            = default;
+    ScratchPool& operator=(ScratchPool&&) noexcept = default;
+
+    // Publicly exposed for zero-overhead access from predict_with_pool.
+    VectorX query_vec;      // size = dim
+    VectorX kernel_vals;    // size = n_centers
+    VectorX diff_vec;       // size = dim
+    VectorX poly_vec;       // size = poly_cols (may be 0)
+};
+
+// -----------------------------------------------------------------------------
 //  Public API
 // -----------------------------------------------------------------------------
 
@@ -164,6 +209,29 @@ VectorX predict(const FitResult& fr,
 /// Batched predict.  X is K × D; returns K × M.
 MatrixX predict_batch(const FitResult& fr,
                       const Eigen::Ref<const MatrixX>& X) noexcept;
+
+// -----------------------------------------------------------------------------
+//  Zero-alloc predict overloads (pool-reuse)
+// -----------------------------------------------------------------------------
+//  Contract: pool shape must match the FitResult — pool.dim() ==
+//  fr.centers.cols(), pool.n_centers() == fr.centers.rows(),
+//  pool.poly_cols() == fr.poly_coeffs.rows().  Debug builds assert this via
+//  eigen_assert; mismatched Release calls trigger an Eigen resize that
+//  silently allocates (defeats the optimisation but stays correct).
+
+/// Predict the first output column (M=1 specialisation) using a caller-owned
+/// pool.  No heap allocation in the kernel evaluation loop.
+Scalar predict_scalar_with_pool(const FitResult& fr,
+                                const Eigen::Ref<const VectorX>& x,
+                                ScratchPool& pool) noexcept;
+
+/// Predict all M output channels using a caller-owned pool.  The returned
+/// VectorX is a single allocation imposed by the by-value return type;
+/// callers needing strict O(1) per-query must wait on Slice 07's
+/// out-parameter API.
+VectorX predict_with_pool(const FitResult& fr,
+                          const Eigen::Ref<const VectorX>& x,
+                          ScratchPool& pool) noexcept;
 
 }  // namespace solver
 }  // namespace rbfmax
