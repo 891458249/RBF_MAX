@@ -9,7 +9,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(rbfmax
-    VERSION     0.2.1
+    VERSION     0.2.2
     DESCRIPTION "Industrial-grade RBF interpolation kernel and Maya plug-in"
     LANGUAGES   CXX
 )
