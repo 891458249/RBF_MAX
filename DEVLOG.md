@@ -14,6 +14,45 @@
 
 ---
 
+## 2026-04-19 · Slice 03 — Quaternion algebra (v0.3.0)
+
+**Scope**: First pose-space math primitive layer. Delivers the `rbfmax::rotation` submodule required by Slice 05 (solver) when RBF centers are unit quaternions rather than Euclidean anchors.
+
+**Deliverables**
+- `kernel/include/rbfmax/quaternion.hpp` — three APIs in `rbfmax::rotation::`:
+  - `decompose_swing_twist(q, axis)` returning `SwingTwist{swing, twist}`
+  - `log_map(q) -> Vector3` (rotation vector, short-path)
+  - `exp_map(v) -> Quaternion` (rotation vector → unit quaternion)
+- `tests/test_quaternion.cpp` — 16 TEST blocks (15 active + 1 GTEST_SKIP), ~5000+ assertions via 1000-sample fixed-seed batches.
+- `docs/math_derivation.md §7` (Swing-Twist algebra) and `§8` (Log/Exp Lie algebra) — full derivations. The previous `§6` placeholder was superseded; remaining solver placeholder moved to `§9`.
+
+**Design decisions (from pre-slice design review)**
+- Axis parameterization: `Vector3` (not `Axis3` enum) — supports local bone axes that are not world axes.
+- Unit-axis contract: caller-enforced + `eigen_assert` in Debug (mirrors `distance.hpp` geodesic contract).
+- 90° swing degeneracy: return `twist = Identity` (twist unobservable).
+- Log map double cover: internally flip `q → -q` when `w<0` (shortest-path semantics, standard for interpolation pipelines).
+- Taylor threshold: `|v| = 1e-8` — conservative, Taylor truncation error `O(1e-32) ≪ ε_mach`.
+- Random seed: `0xF5BFA2u` (Slice 02 used `0xF5BFA1u`; sequential seeds per slice for determinism without cross-test collisions).
+
+**Test tolerance register (audit anchor for future review)**
+- Identity/zero round-trips: `1e-14` absolute
+- `Log∘Exp`, `Exp∘Log` round-trip: `1e-10` absolute
+- Taylor near-zero: `1e-14` absolute
+- π-boundary: `1e-8` absolute (asin saturation)
+- Unit-norm preservation: `1e-14` absolute
+
+**Spec deviation note**
+- Spec specified `EIGEN_ASSERT` (uppercase); Eigen 3.3.9 only exposes `eigen_assert` (lowercase) as the public contract macro. Used lowercase form throughout `quaternion.hpp` and its doc comments. Documented in commit 1 message body and here as a single-source-of-truth audit trail.
+
+**Tech-debt register additions**
+- None new. Slice 03 clean, no workarounds.
+
+**Outstanding after Slice 03**
+- Branch protection still pending (needs 2 consecutive green main runs; v0.2.2 was 1st green if remote CI passed, Slice 03 push will be 2nd if green).
+- Slice 04 (kdtree) next in dependency graph.
+
+---
+
 ## 2026-04-19 · Slice 02.5.1 — First CI-caught regression (v0.2.2)
 
 **Context**: Slice 02.5 introduced CI; its very first run on main (trigger: push of `5330836`) failed the `ubuntu-gcc-release` job while both Windows MSVC Release and Debug jobs passed. This is the first CI-caught latent regression and exactly the reason CI was prioritized before Slice 03.
