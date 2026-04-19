@@ -14,6 +14,24 @@ _尚无未发布变更。_
 
 ---
 
+## [0.4.0] — 2026-04-19
+
+### Added
+- `rbfmax::spatial::KdTree` — header-only array-backed Euclidean
+  kd-tree with k-nearest-neighbor search. Prepares RBF interpolation
+  for large-sample (>1000) pose graphs by reducing per-query cost
+  from O(N) to expected O(k log N).
+- `docs/math_derivation.md` §10 — kd-tree geometry, complexity
+  analysis, pruning rule derivation.
+- `tests/test_kdtree.cpp` — 11 TEST blocks covering construction
+  edge cases, brute-force parity, output contracts.
+
+### Unchanged
+- All Slice 01-03 APIs (kernel, distance, rotation) remain
+  bit-identical.
+
+---
+
 ## [0.3.0] — 2026-04-19
 
 ### Added
@@ -154,7 +172,8 @@ _尚无未发布变更。_
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/891458249/RBF_MAX/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/891458249/RBF_MAX/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/891458249/RBF_MAX/compare/v0.2.0...v0.2.1
