@@ -64,13 +64,6 @@ MatrixX random_matrix(std::mt19937& rng, Index r, Index c, Scalar lo = -1.0,
     return m;
 }
 
-VectorX vec_from(std::initializer_list<Scalar> vals) {
-    VectorX v(static_cast<Index>(vals.size()));
-    Index i = 0;
-    for (Scalar x : vals) v(i++) = x;
-    return v;
-}
-
 Scalar rmse(const VectorX& a, const VectorX& b) {
     return std::sqrt((a - b).squaredNorm() / static_cast<Scalar>(a.size()));
 }
