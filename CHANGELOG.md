@@ -14,6 +14,78 @@ _尚无未发布变更。_
 
 ---
 
+## [0.5.0] — 2026-04-19
+
+**Phase 1 · Slice 05 — RBF 求解器（RBF Solver）**
+
+Phase 1 最大切片，落地项目首个**非 header-only 模块**与首个 STATIC
+库 `rbfmax_solver`。RBF 插值的核心 fit→predict 流水线就此成形，
+后续 Slice 06+ 的姿态空间应用、JSON 序列化、Maya 节点对接均依赖
+本切片提供的求解器 API。
+
+### 新增 (Added)
+
+- **`rbfmax::solver` 子库**（`kernel/include/rbfmax/solver.hpp` +
+  `kernel/src/solver.cpp`）：
+  - `fit(centers, targets, options, lambda)`：定 λ Tikhonov 正则解。
+  - `fit(centers, targets, options)`：GCV 自动 λ 选择，基于 SVD 闭式
+    评分函数在 32 点对数网格 `[1e-12, 1e2]` 上扫描，无嵌套求解。
+  - `predict_scalar` / `predict` / `predict_batch`：单点与批量评估，
+    复用训练阶段的核参数与多项式基。
+  - 三档求解回退：`LLT → LDLT → BDCSVD`，结果通过
+    `FitResult::path` 暴露给调用方做数值健康度审计。
+  - 多项式尾：标准单项式基，graded-lex 排序，degree ∈ [0, 3]，按
+    `KernelType` 的 `minimum_polynomial_degree()` 自动激活。
+  - λ 下界 `kLambdaMin = 1e-12`：低于此值在 Release 静默 clamp，
+    Debug 触发 assert（R-09 设计裁定）。
+  - 全部公共 API `noexcept`：失败通过 `FitStatus` + 空权重表达，
+    禁止异常穿透到 Maya 节点 compute 边界。
+- **`docs/math_derivation.md` §11–13**：
+  - §11 — Tikhonov 正则化：变分形式、闭式法方程、SVD 收缩解释、
+    `kLambdaMin` 由双精度 ε × 矩阵 Frobenius 范数推导。
+  - §12 — Generalised Cross-Validation：影响矩阵 `S(λ)`、SVD 闭式
+    重写、对数网格选取依据。
+  - §13 — QR elimination：鞍点系统 → Householder QR 分解 → 在
+    `Pᵀ` 零空间上的 SPD 子问题，并给出条件数界。
+- **`tests/test_solver.cpp`**：34 个 TEST 块，7 个分类（A 基础接口 8 /
+  B 数值 6 / C 求解路径 4 / D GCV 4 / E 多项式尾 4 / F 批量 3 / G 端到
+  端 5），固定种子 `0xF5BFA4u`，可复现。
+- **`benchmarks/CMakeLists.txt`** + **`benchmarks/.gitkeep`**：清还
+  Slice 01 遗留的 R-06 技术债——`-DRBF_BUILD_BENCHMARKS=ON` 之前
+  因为 benchmarks/ 目录没有 CMakeLists.txt 而永久断链。本切片补齐
+  骨架，自动发现 `bench_*.cpp`（当前无文件，Slice 09 落实）。
+
+### 工程 (Build)
+
+- 顶层 CMake 项目版本 `0.4.0 → 0.5.0`。
+- 新增 STATIC 目标 `rbfmax_solver`（别名 `rbfmax::solver`），PUBLIC
+  link `rbfmax::kernel`，沿用项目严格警告集与 Release 调优 profile。
+- `tests/CMakeLists.txt`：`rbfmax_add_test()` 内对 `test_solver`
+  目标条件链接 `rbfmax::solver`，其它 header-only 测试零额外链接。
+
+### 契约 (Contracts)
+
+- λ 下界：`fit()` 入口处 `lambda < kLambdaMin` ⇒ Release clamp 至
+  `kLambdaMin`，Debug `assert`。
+- 解算路径：`A + λI`（`λ ≥ kLambdaMin`）始终严格正定，因此 LLT 总
+  是首次成功；LDLT/BDCSVD 路径仅在数值病态超出 LLT 的 pivoting
+  容忍时才被激活。
+- 多项式尾：`degree < 0` ⇒ 不激活多项式基（仅核函数）；
+  `degree ∈ [0, 3]`；`degree > 3` 触发 `kInvalidOptions`。
+
+### 验证
+
+- 本地 Windows MSVC 17.3 双绿：Release **98/98**、Debug **98/98**
+  通过（Release 与 Debug 各有 1 个按设计 `GTEST_SKIP` 的反向断言
+  测试，加上 Slice 03 既有的 1 个共享 skip）。
+
+### 已知限制
+
+- 求解器尚未接入 Maya 节点（Slice 09+/Phase 2）。
+- benchmarks 仅有骨架，实际 `bench_*.cpp` 推迟至 Slice 09。
+
+---
+
 ## [0.4.0] — 2026-04-19
 
 ### Added
@@ -172,7 +244,8 @@ _尚无未发布变更。_
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/891458249/RBF_MAX/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/891458249/RBF_MAX/compare/v0.2.1...v0.2.2
