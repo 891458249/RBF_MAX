@@ -248,7 +248,97 @@ $$
 
 ---
 
-## 6. 后续阶段占位
+## 7. Swing-Twist 分解（阶段一 · 切片 03）
 
-- §6 将记录 Swing-Twist 分解的纯四元数代数证明（接入 `quaternion.hpp` 时）。
-- §7 将记录 Tikhonov 正则化正规方程 $(\mathbf{A}+\lambda\mathbf{I})\mathbf{w}=\mathbf{y}$ 的条件数改善估计（接入 `solver.hpp` 时）。
+设单位四元数 $q = (w, \mathbf{v})$ 与单位轴 $\mathbf{a}\in\mathbb{R}^3,\,\lVert\mathbf{a}\rVert=1$。寻找分解 $q = q_{\text{swing}}\cdot q_{\text{twist}}$，使得 $q_{\text{twist}}$ 仅绕 $\mathbf{a}$ 旋转，$q_{\text{swing}}$ 与 $q_{\text{twist}}$ 互不重叠。
+
+### 7.1 投影法公式推导
+
+将 $\mathbf{v}$ 沿 $\mathbf{a}$ 正交分解：
+
+$$
+\mathbf{v} = \mathbf{p} + \mathbf{v}_\perp,\qquad \mathbf{p} = \mathbf{a}\,(\mathbf{a}\cdot\mathbf{v}),\qquad \mathbf{a}\cdot\mathbf{v}_\perp = 0.
+$$
+
+定义 *twist 代理* $\tilde q_{\text{twist}} = (w, \mathbf{p})$。其虚部沿 $\mathbf{a}$ ，因此归一化后即为绕 $\mathbf{a}$ 的纯旋转：
+
+$$
+q_{\text{twist}} \;\equiv\; \frac{\tilde q_{\text{twist}}}{\lVert\tilde q_{\text{twist}}\rVert} \;=\; \frac{(w,\mathbf{p})}{\sqrt{w^2 + \lVert\mathbf{p}\rVert^2}}.
+$$
+
+### 7.2 分解恒等式 $q_{\text{swing}}\cdot q_{\text{twist}} = q$ 的验证
+
+由 $q = q_{\text{swing}}\cdot q_{\text{twist}}$ 直接求解 $q_{\text{swing}} = q\cdot q_{\text{twist}}^{-1} = q\cdot \overline{q_{\text{twist}}}$（单位四元数共轭等于逆）。代码以 `q * out.twist.conjugate()` 落地。可直接验算：$q\cdot\overline{q_{\text{twist}}}\cdot q_{\text{twist}} = q$，故恒等式严格成立（无需"近似"语义）。
+
+### 7.3 退化情形（$\mathbf{a}\to -\mathbf{a}$ 翻转）的极限分析
+
+退化条件 $w = 0$ 且 $\mathbf{a}\cdot\mathbf{v} = 0$ 同时成立时，$q$ 表示绕 $\mathbf{v}$（与 $\mathbf{a}$ 垂直）的 $180°$ 旋转：
+
+$$
+q\,\mathbf{a}\,\overline{q} = -\mathbf{a}.
+$$
+
+此时 twist 代理 $\tilde q_{\text{twist}} = (0,\mathbf{0})$，归一化未定义；几何上"绕 $\mathbf{a}$ 的扭转"无可观测信息。约定：
+
+$$
+q_{\text{twist}} = \mathbf{1},\qquad q_{\text{swing}} = q,
+$$
+
+确保 $q_{\text{swing}}\cdot q_{\text{twist}} = q$ 仍成立，且代码避免 $0/0$ NaN 传染。
+
+### 7.4 数值实现的 $\text{denom\_sq}$ 判定阈值选择
+
+阈值 $\text{denom\_sq} < \texttt{kEps}^2 = 10^{-24}$ 是"双零"判据：$w$ 与 $\lVert\mathbf{p}\rVert$ 同时落入 $\sqrt{\texttt{kEps}}\approx 10^{-12}$ 量级时才触发。该阈值远低于 $\sqrt{\varepsilon_{\text{mach}}}\approx 1.5\times 10^{-8}$，避免误判常规小角度输入；又远高于 $\varepsilon_{\text{mach}}^2$，避免病态分母穿透到 `normalized()` 内部的 ULP 不稳定区。
+
+---
+
+## 8. Log/Exp map — Lie 代数背景（阶段一 · 切片 03）
+
+### 8.1 $SO(3)\leftrightarrow \mathfrak{so}(3)\leftrightarrow \mathbb{R}^3$ 的同构
+
+$SO(3)$ 的 Lie 代数 $\mathfrak{so}(3)$ 是 $3\times 3$ 反对称矩阵空间，与 $\mathbb{R}^3$ 通过帽子算子 $\hat{\,\cdot\,}: \mathbb{R}^3 \to \mathfrak{so}(3)$ 同构。指数映射 $\exp: \mathfrak{so}(3)\to SO(3)$ 与对数映射 $\log$ 互逆于"短弧"区域 $\lVert\mathbf{r}\rVert < \pi$。本模块以单位四元数表示 $SO(3)$，故 $\exp,\log$ 在 $S^3/\{\pm 1\}\simeq SO(3)$ 与 $\mathbb{R}^3$ 之间建立映射。
+
+### 8.2 $\exp$ 的显式公式与 Taylor 展开
+
+对旋转向量 $\mathbf{r}\in\mathbb{R}^3$，令 $\theta = \lVert\mathbf{r}\rVert$，$\mathbf{n} = \mathbf{r}/\theta$。则
+
+$$
+\exp(\mathbf{r}) \;=\; \Bigl(\cos(\tfrac{\theta}{2}),\;\sin(\tfrac{\theta}{2})\,\mathbf{n}\Bigr) \;=\; \Bigl(\cos(\tfrac{\theta}{2}),\;\frac{\sin(\theta/2)}{\theta}\,\mathbf{r}\Bigr).
+$$
+
+$\theta\to 0$ 时 $\sin(\theta/2)/\theta = \tfrac{1}{2} - \tfrac{\theta^2}{48} + \mathcal{O}(\theta^4)$，$\cos(\theta/2) = 1 - \tfrac{\theta^2}{8} + \mathcal{O}(\theta^4)$，二阶 Taylor 即可。
+
+### 8.3 $\log$ 的显式公式与双覆盖处理
+
+对单位四元数 $q = (w,\mathbf{v})$，令 $\theta = 2\,\text{atan2}(\lVert\mathbf{v}\rVert, w)$。等价地，当 $w \ge 0$ 时
+
+$$
+\log(q) \;=\; 2\arcsin(\lVert\mathbf{v}\rVert)\,\frac{\mathbf{v}}{\lVert\mathbf{v}\rVert} \;=\; \mathbf{v}\,\frac{2\arcsin(\lVert\mathbf{v}\rVert)}{\lVert\mathbf{v}\rVert}.
+$$
+
+**双覆盖**：$q$ 与 $-q$ 表示同一旋转。短弧约定取 $w\ge 0$ 的代表元，即当 $w<0$ 时内部翻转 $q\mapsto -q$。$w=0$ 边界本质模糊，单测以 $\min(\lVert a-b\rVert,\lVert a+b\rVert)$ 折叠双覆盖距离。
+
+### 8.4 Taylor 阈值 $10^{-8}$ 的误差分析
+
+阈值依据：当 $\theta < 10^{-8}$ 时
+
+- $\exp$ 的 $\sin(\theta/2)/\theta$ 二阶截断误差为 $\tfrac{\theta^4}{3840}\lesssim 2.6\times 10^{-37}$；
+- $\log$ 的 $2\arcsin(x)/x$ 二阶截断误差为 $\tfrac{3x^4}{40}\lesssim 7.5\times 10^{-34}$（$x = \lVert\mathbf{v}\rVert\le \theta/2$ 量级）。
+
+二者均比 $\varepsilon_{\text{mach}}\approx 2.2\times 10^{-16}$ 低 17 个数量级，因此 Taylor 分支在阈值处与标准分支误差量级匹配，无可观测精度断层。阈值取 $10^{-8}$ 而非更小值是为了**远离** $\sin/\arcsin$ 的微调精度地板（$\theta\sim 10^{-15}$ 量级时 $\sin$ 本身丢精度），以"提早进入 Taylor 分支"为安全策略。
+
+### 8.5 单测容差表（审查锚点）
+
+| 用例 | 容差 | 依据 |
+|---|---|---|
+| 恒等映射往返（log of Identity / exp of Zero） | $10^{-14}$ 绝对 | $\varepsilon_{\text{mach}}$ 量级 |
+| $\log\circ\exp$、$\exp\circ\log$ 往返 | $10^{-10}$ 绝对 | 累积 $\sin/\cos$ 链误差 |
+| Taylor 分支（$\theta = 10^{-10}$） | $10^{-14}$ 绝对 | 截断误差远低于 $\varepsilon_{\text{mach}}$ |
+| $\pi$ 边界（$\theta = \pi - 10^{-6}$） | $10^{-8}$ 绝对 | $\arcsin$ 在 1 附近饱和 |
+| 输出单位性 $\bigl|\lVert q\rVert - 1\bigr|$ | $10^{-14}$ 绝对 | $\sin^2 + \cos^2 = 1$ 严格 |
+
+---
+
+## 9. 后续阶段占位
+
+- §9 将记录 Tikhonov 正则化正规方程 $(\mathbf{A}+\lambda\mathbf{I})\mathbf{w}=\mathbf{y}$ 的条件数改善估计（接入 `solver.hpp` 时）。

@@ -49,3 +49,4 @@ endfunction()
 # ---------------------------------------------------------------------------
 rbfmax_add_test(test_kernel_functions)
 rbfmax_add_test(test_distance)
+rbfmax_add_test(test_quaternion)
