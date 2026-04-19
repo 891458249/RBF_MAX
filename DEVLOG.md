@@ -14,6 +14,41 @@
 
 ---
 
+## 2026-04-19 · Slice 04 — kd-tree spatial index (v0.4.0)
+
+**Scope**: Introduce nearest-neighbor acceleration for RBF interpolation under large-sample regimes. Required by Slice 05 (solver) when N > ~1000 and per-query O(N) cost becomes prohibitive for 60fps playback.
+
+**Deliverables**
+- `kernel/include/rbfmax/kdtree.hpp` — header-only, ~230 LOC, array-backed, variance-based split.
+- `tests/test_kdtree.cpp` — 11 TEST blocks, brute-force parity validation on 500-sample × 100-query scan.
+- `docs/math_derivation.md §10` — complexity & pruning geometry, edge-case behavior table.
+
+**Design decisions (from pre-slice design review)**
+- Array-backed nodes (vs linked) for cache locality.
+- Caller-managed sample lifetime (zero-copy via `Eigen::Ref<const MatrixX>`).
+- Out-parameter buffers (zero-alloc hot path).
+- Recursive (vs iterative-with-stack) — depth log₂N bounded.
+- `std::priority_queue` as max-heap on squared distance.
+- Variance-based split dimension.
+- Median split value (`std::nth_element`).
+- `k>N` silently clamps, returns actual count.
+- Output ascending by distance, squared distances (no `sqrt`).
+
+**Workflow note (first post-protection slice)**
+- Slice 04 is the first slice developed on a feature branch (`slice-04-kdtree`) merged via PR, after Branch Protection on `main` was enabled following Slice 03's second consecutive green CI. Direct push to main is now rejected.
+- Tag `v0.4.0` will be applied post-merge on the main HEAD by a separate authorization round.
+
+**Spec deviation note**
+- Test K3 was specified as a "tree depth bounded" probe, but the public KdTree API deliberately does not expose `nodes_` (encapsulation invariant). Replaced K3 with a stronger functional property: build correctness on N=1000 verified via 1-NN parity against brute force. The `O(log N)` query touch count is implicitly exercised by K11's <500ms budget on N=10000. Documented in commit 1 message body.
+
+**Tech-debt register additions**
+- None new. A6-style death tests deliberately avoided (see T-07).
+
+**Outstanding**
+- Slice 05 (solver) — next in dependency graph; first slice to unify kernel + distance + rotation + kdtree into an end-to-end RBF interpolation pipeline with Tikhonov regularization.
+
+---
+
 ## 2026-04-19 · Slice 03 — Quaternion algebra (v0.3.0)
 
 **Scope**: First pose-space math primitive layer. Delivers the `rbfmax::rotation` submodule required by Slice 05 (solver) when RBF centers are unit quaternions rather than Euclidean anchors.
