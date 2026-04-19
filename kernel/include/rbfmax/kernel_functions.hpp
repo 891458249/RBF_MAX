@@ -66,8 +66,13 @@ enum class KernelType : std::uint8_t {
 /// `eps` unused; we still store it so that callers may switch kernels at
 /// runtime without re-plumbing parameter vectors.
 struct KernelParams {
-    KernelType type {KernelType::kGaussian};
-    Scalar     eps  {static_cast<Scalar>(1.0)};  // Only used by Gaussian/IMQ.
+    KernelType type;
+    Scalar     eps;  // Only used by Gaussian/IMQ.
+
+    KernelParams() noexcept
+        : type(KernelType::kGaussian), eps(static_cast<Scalar>(1.0)) {}
+    KernelParams(KernelType t, Scalar e) noexcept
+        : type(t), eps(e) {}
 };
 
 /// Returns the minimum polynomial degree required to guarantee
