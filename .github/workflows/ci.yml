@@ -1,0 +1,110 @@
+# =============================================================================
+# RBF_MAX — Continuous Integration baseline
+# -----------------------------------------------------------------------------
+# Matrix:
+#   * Windows 2022 + MSVC 17.x, Release
+#   * Windows 2022 + MSVC 17.x, Debug   (EIGEN_ASSERT contract guard)
+#   * Ubuntu 22.04 + GCC 11,    Release (cross-platform + Maya 2025 align)
+#
+# Caching: FetchContent-populated Eigen 3.3.9 + GoogleTest 1.12.1 sources
+# under build/_deps/ are cached keyed on cmake/FetchDependencies.cmake hash.
+# =============================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-msvc-release:
+    name: Windows / MSVC / Release
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('cmake/FetchDependencies.cmake') }}
+
+      - name: Configure (Release)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build (Release)
+        run: cmake --build build --config Release -- /m
+
+      - name: Test (Release)
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload test log on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-windows-release
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  windows-msvc-debug:
+    name: Windows / MSVC / Debug
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build-dbg/_deps
+          key: ${{ runner.os }}-deps-dbg-${{ hashFiles('cmake/FetchDependencies.cmake') }}
+
+      - name: Configure (Debug)
+        run: cmake -S . -B build-dbg -G "Visual Studio 17 2022" -A x64
+
+      - name: Build (Debug)
+        run: cmake --build build-dbg --config Debug -- /m
+
+      - name: Test (Debug)
+        run: ctest --test-dir build-dbg -C Debug --output-on-failure
+
+      - name: Upload test log on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-windows-debug
+          path: build-dbg/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  ubuntu-gcc-release:
+    name: Ubuntu / GCC 11 / Release
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-deps-${{ hashFiles('cmake/FetchDependencies.cmake') }}
+
+      - name: Configure (Release)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build (Release)
+        run: cmake --build build -j$(nproc)
+
+      - name: Test (Release)
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload test log on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-ubuntu-release
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
