@@ -14,6 +14,34 @@
 
 ---
 
+## 2026-04-19 · Slice 02.5 — CI baseline (v0.2.1)
+
+**Scope**: Bootstrap GitHub Actions workflow covering the three committed compiler/build permutations.
+
+**Deliverables**
+- `.github/workflows/ci.yml` — three-job matrix:
+  - `windows-msvc-release` on windows-2022, MSVC 17.x, Release
+  - `windows-msvc-debug`   on windows-2022, MSVC 17.x, Debug
+  - `ubuntu-gcc-release`   on ubuntu-22.04, GCC 11, Release
+- FetchContent dependency cache keyed on `cmake/FetchDependencies.cmake` hash.
+- Test log artifacts uploaded on failure for post-mortem.
+- Concurrency group cancels superseded runs on the same ref.
+
+**Out of scope (deferred)**
+- macOS runner (low Maya usage on that platform)
+- GCC 4.8.2 (Maya 2018; needs CentOS 6 container — defer to Phase 2)
+- Clang, sanitizers, static analysis — revisit at Slice 05 or later
+- Branch protection rule on main — to be enabled after the workflow has two consecutive green runs on main.
+
+**Version note (historical)**
+- The `v0.1.0` tag points at the `feat(kernel)` bootstrap commit (`a8f0143`), because Slice 01 did not separate a `chore(release)` commit. From Slice 02 onward releases are isolated to their own `chore(release)` commits for cleaner audit.
+
+**Tech-debt register**
+- T-03 (new): branch protection rule not yet enabled. Enable after two consecutive green main runs.
+- R-10 (new): if CI matrix flakes from GitHub runner network instability hitting GitLab-hosted Eigen, consider bundling Eigen as a git submodule or upstreaming to an internal mirror.
+
+---
+
 ## 2026-04-19 · Slice 02 — Distance Metrics
 
 **阶段**：Phase 1 (Mathematical Kernel)
