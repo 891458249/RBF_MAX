@@ -14,6 +14,27 @@ _尚无未发布变更。_
 
 ---
 
+## [0.3.0] — 2026-04-19
+
+### Added
+- `rbfmax::rotation` submodule with Swing-Twist decomposition, Log/Exp
+  maps between SO(3) and its Lie algebra ℝ³. Provides the quaternion
+  algebra primitives required by the upcoming solver slice for
+  pose-space RBF interpolation.
+- `docs/math_derivation.md` §7 Swing-Twist algebra and §8 Log/Exp Lie
+  algebra — full derivations including singularity handling and
+  Taylor-threshold error analysis.
+- `tests/test_quaternion.cpp` — 16 test blocks (1 GTEST_SKIPped),
+  ~5000+ assertions via 1000-sample fixed-seed random batches.
+  Covers decomposition reconstruction, short-path double cover,
+  Taylor branches, and π-boundary precision.
+
+### Unchanged
+- All previously released APIs (kernel functions, distance metrics)
+  remain bit-identical. This slice is purely additive.
+
+---
+
 ## [0.2.2] — 2026-04-19
 
 ### Fixed
@@ -133,7 +154,8 @@ _尚无未发布变更。_
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/891458249/RBF_MAX/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/891458249/RBF_MAX/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/891458249/RBF_MAX/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/891458249/RBF_MAX/compare/v0.1.0...v0.2.0
