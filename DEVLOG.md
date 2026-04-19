@@ -14,6 +14,42 @@
 
 ---
 
+## 2026-04-19 · Slice 02.5.1 — First CI-caught regression (v0.2.2)
+
+**Context**: Slice 02.5 introduced CI; its very first run on main (trigger: push of `5330836`) failed the `ubuntu-gcc-release` job while both Windows MSVC Release and Debug jobs passed. This is the first CI-caught latent regression and exactly the reason CI was prioritized before Slice 03.
+
+**Root cause**
+
+`KernelParams` (introduced in Slice 01) used default member initializers to encode defaults:
+
+```cpp
+struct KernelParams {
+    KernelType type {KernelType::kGaussian};
+    Scalar     eps  {1.0};
+};
+```
+
+Under C++11 `[dcl.init.aggr]/1`, any brace-or-equal-initializer on non-static data members disqualifies the class from being an aggregate. C++14 lifted this restriction. MSVC permissively accepts C++14 aggregates under `/std:c++11`, which masked the bug locally. GCC 11 with `-std=c++11 -Wpedantic` correctly rejected the call site `KernelParams{kGaussian, 2.0}` in `tests/test_kernel_functions.cpp:229`.
+
+**Fix**
+
+Replaced default member initializers with two explicit constructors:
+
+- `KernelParams() noexcept` — defaults to `{kGaussian, 1.0}`
+- `KernelParams(KernelType, Scalar) noexcept` — explicit 2-arg
+
+Semantic equivalence at all call sites preserved; no test changes.
+
+**Tech-debt register additions**
+
+- R-11 (new): MSVC silently accepts C++14 aggregate rules under `/std:c++11`. Any use of C++14-only language features must be audited manually or exposed by CI. A future `fix(cmake)` could add `/Zc:__cplusplus` already present plus a comment warning, but MSVC has no equivalent of `-Wpedantic` for aggregate rules.
+
+**Lesson**
+
+- CI-before-new-features was the right call. Slice 02.5 bought 24h of calendar time, caught a C++11 bug that would have silently leaked into every subsequent slice, and paid for itself on day 1.
+
+---
+
 ## 2026-04-19 · Slice 02.5 — CI baseline (v0.2.1)
 
 **Scope**: Bootstrap GitHub Actions workflow covering the three committed compiler/build permutations.
