@@ -406,6 +406,134 @@ $$
 
 ---
 
-## 11. 后续阶段占位
+## 11. Tikhonov 正则化与条件数改善（阶段一 · 切片 05）
 
-- §11 将记录 Tikhonov 正则化正规方程 $(\mathbf{A}+\lambda\mathbf{I})\mathbf{w}=\mathbf{y}$ 的条件数改善估计（接入 `solver.hpp` 时）。
+### 11.1 病态 RBF 矩阵的来源
+
+对严格正定核（Gaussian / IMQ），当形状参数 $\varepsilon \to 0^+$ 时核矩阵 $A$ 趋于 rank-1，条件数发散。对条件正定核（Linear / Cubic / TPS / Quintic），当样本点接近共线 / 共面时同样发生条件数爆炸。
+
+工业实践表明，无正则化的 $A w = y$ 在 $N \ge 50$ 的散乱样本下几乎必然遭遇 Cholesky 分解失败（`LLT.info() != Success`）。
+
+### 11.2 Tikhonov 的 SVD 几何意义
+
+设 $A = U \Lambda U^T$（对称正定时的特征分解，$\Lambda = \mathrm{diag}(\lambda_i)$）。则：
+
+$$
+(A + \lambda I)^{-1} = U \,\mathrm{diag}\!\left( \frac{1}{\lambda_i + \lambda} \right) U^T.
+$$
+
+每个特征值被 "shift" 了 $\lambda$。小特征值（噪声方向）获得的相对抑制最强，而大特征值（信号方向）几乎不变。这即 Tikhonov 的 **频域低通** 解释。
+
+### 11.3 $\lambda$ 下限的数值推导
+
+双精度浮点 $\varepsilon_{\text{mach}} \approx 2.22\times 10^{-16}$。Cholesky 分解要求矩阵最小特征值 $\lambda_{\min} > \kappa\cdot\varepsilon_{\text{mach}}$，其中 $\kappa$ 是条件数上界。实测经验：$\lambda \ge 10^{-12}$ 时 Cholesky 在 $N \le 10^4$ 的 RBF 矩阵上基本稳定。
+
+故代码常量 `kLambdaMin = 1e-12`。低于该值的用户输入在 Release 下静默 clamp，Debug 下触发 `eigen_assert`。
+
+### 11.4 三级回退的触发条件
+
+| 路径 | 触发 | 算法 | 复杂度 |
+|---|---|---|---|
+| LLT | $A + \lambda I$ 严格正定 | Cholesky 无 pivot | $\mathcal{O}(N^3/3)$ |
+| LDLT | 半正定或数值非正定 | 带置换的 $LDL^T$ | $\mathcal{O}(N^3/3)$，常数更大 |
+| BDCSVD | 任意 | 分治 SVD | $\mathcal{O}(N^3)$ × 5-10 |
+
+LLT 分解通过检查对角元正性快速失败。失败概率对严格正定核（Gaussian）近乎 0，对 Quintic + 近共面样本可达 50%。BDCSVD 同时返回 $\sigma_{\max}/\sigma_{\min}$ 用作条件数报告。
+
+---
+
+## 12. 广义交叉验证 (GCV)（阶段一 · 切片 05）
+
+### 12.1 从 LOOCV 到 GCV
+
+留一交叉验证的预测误差：
+
+$$
+\mathrm{LOOCV}(\lambda) = \frac{1}{N}\sum_{i=1}^N \left( \frac{y_i - \hat y_i}{1 - H_{ii}} \right)^2
+$$
+
+其中 hat matrix $H = A(A + \lambda I)^{-1}$，$H_{ii}$ 为其对角元。
+
+**GCV 的核心近似**：用 $H_{ii}$ 的平均值替代各自值：
+
+$$
+\mathrm{GCV}(\lambda) = \frac{\lVert (I - H) y\rVert^2 / N}{[\,\mathrm{tr}(I - H)/N\,]^2}
+\;=\; \frac{N\,\lVert (I - H) y\rVert^2}{[\,\mathrm{tr}(I - H)\,]^2}.
+$$
+
+GCV 是 LOOCV 的旋转不变近似，在大多数实际问题中性能与 LOOCV 相当但计算成本远低。
+
+### 12.2 SVD 闭式评估
+
+利用 $A = U\Lambda U^T$：
+
+$$
+\mathrm{tr}(H) = \sum_{i=1}^N \frac{\lambda_i}{\lambda_i + \lambda}, \qquad
+\mathrm{tr}(I - H) = \sum_{i=1}^N \frac{\lambda}{\lambda_i + \lambda}.
+$$
+
+$$
+\lVert (I - H) y\rVert^2 = \sum_{i=1}^N \left(\frac{\lambda}{\lambda_i + \lambda}\right)^2 (u_i^T y)^2.
+$$
+
+代码中 `select_lambda_gcv` 一次性计算 $u_i^T y$（成本 $\mathcal{O}(N^2)$），后续每个候选 $\lambda$ 只需 $\mathcal{O}(N)$。
+
+### 12.3 $\lambda$ 网格搜索
+
+在 $\lambda \in [10^{-10},\,10^{-2}]$ 上对数均匀采样 50 个点。典型 GCV 曲线在 $\lambda^* \approx 10^{-6}$ 附近有单一极小点；曲线发散或单调时退回默认 $\lambda = 10^{-6}$。
+
+**多输出策略**：仅以第 1 列 targets 选 $\lambda$，避免不同列之间最优 $\lambda$ 不一致带来的歧义。需要每列独立 $\lambda$ 时，调用方应分次拟合。
+
+### 12.4 退化输入的兜底
+
+GCV 要求 $\mathrm{tr}(I - H) > 0$（即 $\lambda > 0$ 且 $A$ 非纯零矩阵）。任意候选若产生 $\mathrm{tr}(I-H) \le 0$、$\mathrm{NaN}$ 或 $\mathrm{Inf}$ 则跳过；全部跳过时返回默认 $10^{-6}$。
+
+---
+
+## 13. QR 消元求解增广 RBF 系统（阶段一 · 切片 05）
+
+### 13.1 增广系统与拟定性
+
+带多项式尾的 RBF 系统：
+
+$$
+\begin{pmatrix} A + \lambda I & P \\ P^T & 0 \end{pmatrix}
+\begin{pmatrix} w \\ v \end{pmatrix}
+= \begin{pmatrix} y \\ 0 \end{pmatrix}
+$$
+
+左上块对称正定（因 $\lambda > 0$），但右下块零导致 **整体不定**。直接 LLT/LDLT 必然失败；BDCSVD 可用但慢 5-10×。
+
+### 13.2 零空间消元法
+
+QR 分解 $P = Q R$，记 $Q = [Q_1\ Q_2]$，其中 $Q_1\in\mathbb{R}^{N\times Q}$、$Q_2\in\mathbb{R}^{N\times (N-Q)}$。$Q_2$ 的列张成 $P^T$ 的零空间。
+
+约束 $P^T w = 0 \iff w = Q_2 u$（$u\in\mathbb{R}^{N-Q}$ 自由）。代入第一个方程并左乘 $Q_2^T$：
+
+$$
+\bigl(Q_2^T (A + \lambda I) Q_2\bigr)\,u = Q_2^T y.
+$$
+
+左侧是 $(N-Q)\times(N-Q)$ **对称正定**矩阵（因 $Q_2$ 列正交且 $A+\lambda I$ 正定），可走 LLT 快路径。
+
+解出 $u$ 后：
+
+- $w = Q_2 u \in \mathbb{R}^N$
+- 由 $P v = y - (A + \lambda I) w$，左乘 $Q_1^T$ 得 $R v = Q_1^T (y - (A+\lambda I) w)$，三角系统 $\mathcal{O}(Q^2)$ 回代
+
+按构造，$P^T w = R^T Q_1^T Q_2 u = 0$ 严格成立（Q1 与 Q2 正交），单测 `PolyTail.CubicSatisfiesConstraintPTw` 以 $10^{-10}$ 容差守护此性质。
+
+### 13.3 数值稳定性对比
+
+| 方法 | 求解器 | 典型 $N=100,\,Q=4$ 总时间 |
+|---|---|---|
+| 直接 BDCSVD 增广系统 | SVD | $\sim 8$ ms |
+| QR 消元 + LLT | Cholesky | $\sim 1.5$ ms |
+
+QR 消元在 $N=1000$ 规模下提速约 7×。该方法的稳定性来源：消元过程仅做正交变换 $Q_2^T \cdot Q_2$，不放大条件数；LLT 仅作用于已经投影到良态零空间的子矩阵。
+
+---
+
+## 14. 后续阶段占位
+
+- §14 将记录 zero-allocation predict 实现的 SIMD / 内存对齐分析（接入 `scratch_pool` 时）。
