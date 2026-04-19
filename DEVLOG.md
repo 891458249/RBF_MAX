@@ -14,6 +14,40 @@
 
 ---
 
+## 2026-04-20 · Slice 06 — ScratchPool for zero-alloc predict (v0.6.0)
+
+**Scope**: Breathing slice after Slice 05's peak workload. Pure engineering optimization, no new math. Eliminate heap allocations in predict hot path to prepare for Maya 60fps `compute()`.
+
+**Deliverables**
+- `kernel/include/rbfmax/solver.hpp` — `ScratchPool` class (move-only, four pre-allocated `VectorX` members, `noexcept` API) + two `predict_*_with_pool` declarations, placed adjacent to the existing public API block.
+- `kernel/src/solver.cpp` — `ScratchPool` ctor, `build_polynomial_row` helper (anonymous namespace), `predict_with_pool`, `predict_scalar_with_pool`, and internal refactor of `predict_batch` / `predict` / `predict_scalar` to share the pooled compute path via delegation.
+- `tests/test_solver.cpp` — 9 new TEST blocks (P1/P2/P3/P4/P5/P7/P8/P9/P10); P6 zero-alloc instrumentation intentionally skipped per design decision (deferred to Slice 09 google-benchmark suite). Random seed `0xF5BFA5u` (sequential after Slice 05's `0xF5BFA4u`).
+
+**Design decisions (3 locked pre-slice + 2 derived)**
+1. **Memory strategy**: pre-allocated Eigen `VectorX` members, not `std::vector` + manual offsets and not a custom arena. Rationale: Eigen's resize-at-construction guarantees the inner predict loop hits no allocator; arena would invite ABI-mismatch headaches with Maya's TBB.
+2. **API integration**: internally consume pool in `predict_batch` (transparent to users; signature unchanged) + expose `predict_with_pool` / `predict_scalar_with_pool` explicitly for Maya per-frame reuse where the node owns pool lifetime.
+3. **Thread safety**: pool is NOT thread-safe; each thread / TBB task owns its own instance. Documented in header doc-block.
+4. **File placement**: `ScratchPool` lives in `solver.hpp` (not a separate `scratch_pool.hpp`) — it is a solver-internal scratch type and does not warrant a new header in the public surface.
+5. **Compute path unification**: `predict` / `predict_scalar` were refactored to delegate to the pool variants via an internal temporary pool. This single-sources the arithmetic and lets P4/P5 lock the bit-identity invariant (1e-14 absolute tolerance — no wiggle room, exact equality expected).
+
+**Tolerance register (audit anchor)**
+- P4 / P5 / P7 — `1e-14` absolute. `predict_with_pool` and `predict` share the *same* arithmetic sequence (delegation, not re-implementation), so equality is theoretically exact; `1e-14` is the safety margin for any reordering Eigen might insert.
+- P9 — no tolerance, only `std::isfinite` (functional smoke test on a 500×500 batch).
+
+**Tech-debt register**
+- None new.
+- Clears the informal "predict allocates per call" concern raised at the end of Slice 05, though `predict` / `predict_with_pool` still return `VectorX` by value (one allocation per query by interface). True O(1) per-query requires an out-parameter API; deferred to Slice 07 (`RBFInterpolator` end-to-end class).
+
+**Workflow note**
+- Third slice on the post-protection PR workflow. Branch `slice-06-scratch-pool` → PR against `main` → CI matrix → human approval → rebase merge → tag `v0.6.0`.
+- Two cmake versions coexist on the dev machine (3.25 standalone for `build-dbg/`, 3.31 VS-bundled for `build/`). Build commands now route to the matching cmake binary per build dir to avoid the "No preprocessor test for Comeau" regen failure observed during Slice 06 verification. Recorded as informal R-15 (no code action needed; environment hygiene).
+
+**Outstanding**
+- Slice 07: `RBFInterpolator` end-to-end class, consumes solver + kdtree + ScratchPool. May introduce out-parameter `predict_into(out, fr, x, pool)` to close the last allocation.
+- Slice 09: benchmark will validate ScratchPool actually eliminates per-iter allocations (current Slice 06 tests only verify functional equivalence).
+
+---
+
 ## 2026-04-19 · Slice 05 — RBF Solver (v0.5.0)
 
 **Scope**: The largest slice in Phase 1. Lands the first non-header-only module (`kernel/src/solver.cpp`) and the first STATIC library target (`rbfmax_solver`), unifying the kernel + distance + rotation + kdtree stack into the canonical RBF `fit → predict` pipeline. Slice 06+ pose-space applications, JSON I/O and Maya node integration all consume `rbfmax::solver`.
