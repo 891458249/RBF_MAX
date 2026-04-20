@@ -14,6 +14,52 @@
 
 ---
 
+## 2026-04-20 · Slice 08 — JSON I/O with schema v1 (v0.8.0)
+
+**Scope**: Persistence layer for trained interpolators. First real consumer of the `nlohmann/json` dependency that has been a deferred fetch function in `cmake/FetchDependencies.cmake` since Slice 02.5. Closes the last functional gap before the Slice 09 benchmark + v1.0.0 finale.
+
+**Deliverables**
+- `kernel/include/rbfmax/io_json.hpp` (~70 LOC) — `rbfmax::io_json::save / load` free functions + `kCurrentSchema` constant.
+- `kernel/src/io_json.cpp` (~390 LOC) — anonymous-ns enum/scalar/matrix helpers, `iso8601_now`, `library_version_string`, `build_v1_json`, `parse_v1_json`, plus the public `save / load` with try-catch perimeters.
+- `RBFInterpolator::save / load` (interpolator.hpp +9 lines, interpolator.cpp +38 lines) — convenience methods delegating to io_json with internal kdtree / pool rebuild on successful load.
+- `tests/test_io_json.cpp` (~440 LOC, 14 TEST blocks across A-E categories).
+- `docs/schema_v1.md` (~155 LOC) — normative schema spec, field-by-field semantics, known limitations, upgrade path.
+
+**Design decisions (8 locked pre-slice)**
+1. **Schema structure: nested** (variant B) over flat (A). Easier evolution; matches industry conventions (`package.json`, `cargo.toml`).
+2. **Version strategy: integer-incrementing `"rbfmax/v<N>"`** (variant A), decoupled from package SemVer. File-format lifecycle differs from package SemVer.
+3. **API: free functions + `RBFInterpolator` convenience methods** (variant B, best of both worlds — testable in isolation, ergonomic at call sites).
+4. **Float precision: full 17-digit double round-trip** (variant B). nlohmann's default formatting recovers the unique IEEE double, locked by tests A1-A5 + D1 with `EXPECT_EQ` (not `EXPECT_NEAR`).
+5. **Errors: bool return, noexcept, atomic update** (variant B). `out_*` is *only* mutated after the entire parse succeeds — failure leaves callers untouched. `RBFInterpolator::load` extends this by also leaving the kdtree / ScratchPool unchanged on failure.
+6. **`meta.version` is diagnostic, not dispatch** (variant A). Two files differing only in `meta.created_at` deserialize identically.
+7. **NaN/Inf: lossy convert to JSON null** (variant C). Pragmatic; documented in schema_v1.md and locked by test D2.
+8. **Random seed: `0xF5BFA7u`** (sequential after Slice 07's `0xF5BFA6u`).
+
+**Deviation from blueprint docx**
+- The original architecture document (`docs/源文档/优化提示词：Claude 插件开发.docx`) recommended Protobuf for serialization. We chose JSON (nlohmann/json) per DEVLOG D-01 for human-readability + zero toolchain overhead. Slice 08 executes that decision. If large-rig file size becomes a bottleneck, a binary sidecar (MessagePack / CBOR) can be added in v2 without breaking JSON readability — schema_v1.md "Typical file size" + "Upgrade path" sections sketch the migration.
+
+**Tolerance register (audit anchor)**
+- A1-A5 / D1 / D2 condition_number (NaN check): exact equality (`EXPECT_EQ` on Eigen matrices, scalar `==`). The full-double-precision round-trip claim is bit-identical, not approximate.
+- E1 predict-after-load consistency: `1e-14` absolute. Same arithmetic path on both sides; the margin guards against any sum-order drift Eigen might introduce.
+- C2 file-readable: only asserts file size > 0; no content tolerance.
+
+**Local-verification surprise (R-15 environment + new MSVC interaction)**
+- First Release build failed with **C4996 on `std::getenv`** (TempFile helper used `std::getenv("TEMP")`). Project ships with `/WX`, so warning → error. Fix: switched the Windows branch of `TempFile` to `_dupenv_s` (heap-allocates the env value, `free()` on cleanup). Linux/POSIX path unchanged.
+- First Release configure failed with `Build step for nlohmann_json failed: 1` even though the source had been git-cloned successfully. Workaround: pass `-DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=$(pwd)/build/_deps/nlohmann_json-src` so FetchContent skips the populate sub-build. This avoids a flaky Visual Studio sub-project step on already-cloned dependencies. CI (which always starts from a clean checkout) will not hit this; the workaround is purely a local development convenience and is not committed (no CMakeLists change needed).
+
+**Tech-debt register**
+- None new.
+- `schema_v1` is now a **permanent commitment** — any future modification of `parse_v1_json` is forbidden unless it would refuse to load legacy v1 files. Future v2/v3 must add new dispatch branches.
+
+**Workflow note**
+- Fifth slice on the post-protection PR workflow. Branch `slice-08-io-json` → PR → CI (with first nlohmann/json fetch — expect cache miss + ~20s extra on the first run) → human approval → rebase merge → tag `v0.8.0`.
+- Auto-delete head branches now enabled at the repo level (per Slice 07 closeout note); Slice 08 will be the first to validate that workflow change.
+
+**Outstanding after Slice 08**
+- **Slice 09**: benchmarks + **v1.0.0** — Phase 1 finale. Will populate the empty `benchmarks/` skeleton from Slice 05, validate the ScratchPool zero-allocation claim deferred from Slice 06, and establish wall-clock baselines for fit/predict at typical N/D/M combinations.
+
+---
+
 ## 2026-04-20 · Slice 07 — RBFInterpolator facade (v0.7.0)
 
 **Scope**: Phase 1 integration slice. Wraps the 5 lower modules (kernel / distance / kdtree / solver / scratch_pool) into a single user-facing class. End of Phase 1 API surface; Slice 08 (JSON I/O) and Slice 09 (benchmarks) are non-API work.
