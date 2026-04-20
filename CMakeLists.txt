@@ -9,7 +9,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(rbfmax
-    VERSION     0.7.0
+    VERSION     0.8.0
     DESCRIPTION "Industrial-grade RBF interpolation kernel and Maya plug-in"
     LANGUAGES   CXX
 )
@@ -74,13 +74,25 @@ target_compile_definitions(rbfmax_kernel INTERFACE
     RBFMAX_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
+# --- nlohmann/json (Slice 08: first real consumer) --------------------------
+# FetchDependencies.cmake exposes this as a deferred fetch function so
+# downstream consumers that never serialize don't pay the clone cost.
+# Slice 08 introduces the first real consumer (rbfmax::io_json) so we call
+# it unconditionally here.
+rbfmax_fetch_nlohmann_json()
+
 # --- Solver library (non-header-only; first .cpp) ---------------------------
 # Slice 05: introduces the first compiled translation unit. Built as STATIC
 # so downstream Maya plug-in DLLs can link without exposing rbfmax internals
 # in their export tables.
+# Slice 06: predict ScratchPool (in solver.cpp).
+# Slice 07: RBFInterpolator facade (interpolator.cpp).
+# Slice 08: JSON I/O (io_json.cpp) — adds nlohmann_json as a transitive
+#           PUBLIC dependency.
 add_library(rbfmax_solver STATIC
     kernel/src/solver.cpp
     kernel/src/interpolator.cpp
+    kernel/src/io_json.cpp
 )
 add_library(rbfmax::solver ALIAS rbfmax_solver)
 
@@ -91,6 +103,7 @@ target_include_directories(rbfmax_solver PUBLIC
 
 target_link_libraries(rbfmax_solver PUBLIC
     rbfmax::kernel
+    nlohmann_json::nlohmann_json
 )
 
 target_compile_features(rbfmax_solver PUBLIC cxx_std_11)

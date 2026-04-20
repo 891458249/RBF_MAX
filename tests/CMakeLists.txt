@@ -26,7 +26,8 @@ function(rbfmax_add_test name)
     )
     # Slice 05+: tests that consume the solver static library link it
     # explicitly. Header-only kernel modules need no extra link.
-    if(name STREQUAL "test_solver" OR name STREQUAL "test_interpolator")
+    if(name STREQUAL "test_solver" OR name STREQUAL "test_interpolator"
+       OR name STREQUAL "test_io_json")
         target_link_libraries(${name} PRIVATE rbfmax::solver)
     endif()
     # Tests get our strict warning set PLUS /bigobj etc. for gtest's template
@@ -58,3 +59,4 @@ rbfmax_add_test(test_quaternion)
 rbfmax_add_test(test_kdtree)
 rbfmax_add_test(test_solver)
 rbfmax_add_test(test_interpolator)
+rbfmax_add_test(test_io_json)
