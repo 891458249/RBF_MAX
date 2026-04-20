@@ -46,6 +46,13 @@ option(RBF_BUILD_BENCHMARKS    "Build Google Benchmark suites"      OFF)
 option(RBF_WARNINGS_AS_ERRORS  "Treat warnings as errors (/WX -Werror)" ON)
 option(RBF_ENABLE_FAST_MATH    "Enable fast-math (breaks NaN-safety!)"  OFF)
 
+# --- Phase 2A — Maya node (Slice 10A+) --------------------------------------
+# Both OFF by default so Phase 1 builds and existing CI remain untouched.
+option(RBF_BUILD_MAYA_NODE
+    "Build the Maya .mll/.so plugin (requires Maya devkit)" OFF)
+option(RBF_BUILD_MAYA_ADAPTER_TESTS
+    "Build pure-C++ adapter tests (no Maya devkit required)" OFF)
+
 # --- Module path & helpers --------------------------------------------------
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerFlags)
@@ -125,6 +132,11 @@ endif()
 
 if(RBF_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
+endif()
+
+# Phase 2A Slice 10A: Maya node subdirectory engages only when requested.
+if(RBF_BUILD_MAYA_NODE OR RBF_BUILD_MAYA_ADAPTER_TESTS)
+    add_subdirectory(maya_node)
 endif()
 
 # --- Summary ----------------------------------------------------------------
