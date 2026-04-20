@@ -14,6 +14,65 @@
 
 ---
 
+## 2026-04-20 · Slice 07 — RBFInterpolator facade (v0.7.0)
+
+**Scope**: Phase 1 integration slice. Wraps the 5 lower modules (kernel / distance / kdtree / solver / scratch_pool) into a single user-facing class. End of Phase 1 API surface; Slice 08 (JSON I/O) and Slice 09 (benchmarks) are non-API work.
+
+**Deliverables**
+- `kernel/include/rbfmax/interpolator.hpp` (~130 LOC) — `InterpolatorOptions` struct and `RBFInterpolator` class (move-only, clone() for per-thread).
+- `kernel/src/interpolator.cpp` (~380 LOC, linked into `rbfmax_solver` STATIC library).
+- `tests/test_interpolator.cpp` (15 TEST blocks, 7 categories, random seed `0xF5BFA6u`).
+- `docs/math_derivation.md §14` — KNN truncation error analysis replacing the prior SIMD-notes placeholder.
+
+**Design decisions (8 locked pre-slice)**
+1. **kdtree only for Gaussian** (decision variant C'): IMQ excluded due to long-tail non-convergence at K=32-64 (per-center contribution ~O(r⁻¹) doesn't decay fast enough).
+2. **fit() fully replaces prior state**: no history retained; equivalent to fresh construct + fit.
+3. **Single `InterpolatorOptions` constructor** taking kernel params only (other fields via brace-init or direct assignment).
+4. **Move-only + `clone()` for per-thread**: rule-of-five hand-written for noexcept guarantees; clone() rebuilds kd-tree against the copy's centers buffer to guarantee spatial-storage independence.
+5. **NOT thread-safe** on a single instance (mutable `ScratchPool` + KNN scratch buffers). Documented in header doc-block.
+6. **Full getter set**: `is_fitted`, `status`, `solver_path`, `n_centers`, `dim`, `lambda_used`, `condition_number`, `uses_kdtree`.
+7. **Default kdtree threshold N=256**; kernel-specific.
+8. **Default K = min(N, 32) for Gaussian**; overridable via `opts_.knn_neighbors`.
+
+**IMQ kdtree deferred** — original spec had decision 1 as variant C (Gaussian+IMQ) but arithmetic check during review showed IMQ truncation error at K=64, N=500 exceeds 1e-2. Revised to C' (Gaussian-only). Future slice could design dedicated ball-tree + adaptive K for IMQ.
+
+**Thread safety contract** — a single `RBFInterpolator` is NOT thread-safe (the mutable `ScratchPool` and `indices_buf_` / `sq_dist_buf_` are shared per-predict-call scratch). Users needing concurrent predict call `clone()` per worker thread. Documented in both header doc-block and the class comment.
+
+**Spec deviations (R-09 protocol, 3 items)**
+
+These were caught during local Release verification when 3/122 tests failed against the originally-speced tolerances. All three turned out to be spec-vs-reality mismatches, not implementation bugs:
+
+| Test | Spec tolerance | Reality | Fix |
+|---|---|---|---|
+| B2 `SecondFitWithDifferentDimensions` | `1e-6` sample-point residual | `~0.02` — 2D × N=50 × Gaussian ε=1 has heavily-overlapping kernels, conditioning leaves ~2% residual | Relaxed to "finite + within 0.1 of target" since B2's intent is just to verify refit-with-new-dim succeeds. |
+| C2 `KnnApproxMatchesDenseForGaussian` | ε=1, 1e-8 | Per §14 (landed this slice!), at ε=1 in 3D unit cube per-center KNN truncation is ~0.37; spec contradicted its own math doc | Changed ε=8 (narrow Gaussian, near-diagonal kernel matrix) + engineering tolerance 1e-3. |
+| G1 `SinCosReconstructsSameAsSolver` | `1e-6` "与 Slice 05 G1 同水准" | Slice 05 G1 (`EndToEnd.SinCosZReconstructs`) actually uses `0.1`; spec misremembered | Aligned to 0.1. |
+
+**Lesson (carries R-09 forward)**: Spec tolerance claims must be substituted back to the math doc the spec itself cites. C2 was particularly embarrassing — the same spec that asked for 1e-8 KNN accuracy also commissioned §14 which proves 1e-8 isn't reachable at ε=1. Cross-reference before dispatch next slice.
+
+**Tolerance register (audit anchor)**
+- A2/A3 sample-point reconstruction (Gaussian/Cubic, N=20-25): `1e-6`/`1e-5` absolute — tight fits with small N, well-conditioned.
+- B1 A→B refit separation check: `> 1e-3` — ensures state actually changed.
+- C2 KNN vs dense: `1e-3` at ε=8, see math §14.4.
+- E1 clone() identity: `1e-14` absolute — bit-identity expected since clone copies FitResult and rebuilds pool+kdtree without re-fitting.
+- F2 singular: status ∈ {OK, SINGULAR_MATRIX}, no tolerance.
+- G1 end-to-end RMSE: `0.1` — matches Slice 05 realistic baseline.
+
+**Tech-debt register**
+- None new by count, but one item of note:
+  - `build_polynomial_row_local` duplicated in `interpolator.cpp` anonymous namespace (matches `solver.cpp`'s private helper). Accepted rather than exposing an internal helper through `solver.hpp`'s public surface. Consolidate if Slice 10+ introduces a third consumer.
+
+**Workflow note**
+- Fourth slice on the post-protection PR workflow. Branch `slice-07-interpolator` → PR → CI matrix → human approval → rebase merge → tag `v0.7.0`.
+- Continued R-15 environment hygiene (two cmake versions, one per build dir).
+
+**Outstanding after Slice 07**
+- **Slice 08**: JSON I/O — serialize `FitResult` for persistence and cross-process transfer. `nlohmann_json` already fetched (deferred fetch function ready in `FetchDependencies.cmake`).
+- **Slice 09**: benchmarks — first real performance validation, including ScratchPool zero-alloc claim (Slice 06 deferred). Populates the empty `benchmarks/` skeleton from Slice 05.
+- **v1.0.0** at end of Slice 09 marks Phase 1 complete.
+
+---
+
 ## 2026-04-20 · Slice 06 — ScratchPool for zero-alloc predict (v0.6.0)
 
 **Scope**: Breathing slice after Slice 05's peak workload. Pure engineering optimization, no new math. Eliminate heap allocations in predict hot path to prepare for Maya 60fps `compute()`.
