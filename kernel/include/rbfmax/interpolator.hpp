@@ -33,6 +33,7 @@
 #define RBFMAX_INTERPOLATOR_HPP
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <Eigen/Core>
@@ -104,6 +105,14 @@ public:
     Scalar              lambda_used()      const noexcept;
     Scalar              condition_number() const noexcept;
     bool                uses_kdtree()      const noexcept;
+
+    // ---- Persistence (Slice 08) -----------------------------------------
+    // Convenience methods that delegate to rbfmax::io_json::save / load.
+    // Returns true on success; false on any failure (file I/O, schema
+    // mismatch, parse error).  On load failure, this interpolator's
+    // state is unchanged (atomic update semantics).
+    bool save(const std::string& path) const noexcept;
+    bool load(const std::string& path)       noexcept;
 
 private:
     InterpolatorOptions               opts_;

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "rbfmax/distance.hpp"
+#include "rbfmax/io_json.hpp"
 
 namespace rbfmax {
 
@@ -357,6 +358,43 @@ Scalar RBFInterpolator::condition_number() const noexcept {
 
 bool RBFInterpolator::uses_kdtree() const noexcept {
     return kdtree_ != nullptr;
+}
+
+// -----------------------------------------------------------------------------
+//  Persistence (Slice 08) — delegate to rbfmax::io_json
+// -----------------------------------------------------------------------------
+
+bool RBFInterpolator::save(const std::string& path) const noexcept {
+    return io_json::save(opts_, fit_result_, path);
+}
+
+bool RBFInterpolator::load(const std::string& path) noexcept {
+    InterpolatorOptions tmp_opts;
+    solver::FitResult   tmp_fr;
+    if (!io_json::load(tmp_opts, tmp_fr, path)) {
+        // Atomic-update contract: interpolator state untouched on failure.
+        return false;
+    }
+
+    opts_       = tmp_opts;
+    fit_result_ = std::move(tmp_fr);
+    fitted_     = (fit_result_.status == solver::FitStatus::OK);
+
+    pool_ = solver::ScratchPool(fit_result_.centers.cols(),
+                                fit_result_.centers.rows(),
+                                fit_result_.poly_coeffs.rows());
+
+    if (should_use_kdtree()) {
+        kdtree_.reset(new spatial::KdTree(fit_result_.centers));
+        const Index k = effective_k_neighbors();
+        indices_buf_.assign(static_cast<std::size_t>(k), Index{0});
+        sq_dist_buf_.assign(static_cast<std::size_t>(k), Scalar{0});
+    } else {
+        kdtree_.reset();
+        indices_buf_.clear();
+        sq_dist_buf_.clear();
+    }
+    return true;
 }
 
 // -----------------------------------------------------------------------------
