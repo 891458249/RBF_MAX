@@ -14,6 +14,71 @@ _尚无未发布变更。_
 
 ---
 
+## [1.0.0] — 2026-04-20
+
+**Phase 1 complete.** First major public release. Delivers the
+Maya-free pure C++ mathematical kernel for RBF interpolation.
+
+### Added (Slice 09)
+
+- `benchmarks/` — Google Benchmark suite with 11 cases covering
+  kernel primitives (A group, 3), solver training (B group, 3),
+  and predict hot path (C group, 5 — including ScratchPool vs
+  regular comparison validating Slice 06's deferred P6 zero-
+  allocation claim).
+- `benchmark-smoke` CI job for opt-in performance regression checks
+  on tag push or manual `workflow_dispatch` (not blocking on PRs).
+- `README.md` — project overview, quick start, architecture diagram,
+  feature list, performance reference, build instructions, roadmap.
+- `LICENSE` — Apache License 2.0 full text.
+
+### Phase 1 Complete Feature Summary
+
+- **Slice 01** (v0.1.0): Six radial basis kernel functions
+  (Linear, Cubic, Quintic, Thin-Plate Spline, Gaussian, Inverse
+  Multiquadric) with analytic derivatives, NaN propagation, and
+  `kLogEps` clamping for TPS singularity.
+- **Slice 02** (v0.2.0): Euclidean squared/distance and quaternion
+  geodesic distance with acos clamping, asin fallback for near-
+  identity, and double-cover handling.
+- **Slice 02.5 / 02.5.1** (v0.2.1 / v0.2.2): GitHub Actions CI
+  matrix (Windows MSVC Release + Debug, Ubuntu GCC 11 Release)
+  with FetchContent caching; first CI-caught regression fixed
+  (C++11 aggregate rules on `KernelParams`).
+- **Slice 03** (v0.3.0): Swing-Twist quaternion decomposition,
+  Log/Exp maps between SO(3) and ℝ³.
+- **Slice 04** (v0.4.0): Array-backed Euclidean kd-tree with
+  variance-based split, median partitioning, KNN search.
+- **Slice 05** (v0.5.0): Tikhonov-regularized RBF solver with
+  three-tier fallback (LLT / LDLT / BDCSVD), QR elimination for
+  polynomial tails, GCV auto-lambda via SVD closed form.
+- **Slice 06** (v0.6.0): `ScratchPool` pre-allocated buffers for
+  zero-allocation predict hot path.
+- **Slice 07** (v0.7.0): `RBFInterpolator` facade class unifying
+  all lower modules, with `clone()` for per-thread usage.
+- **Slice 08** (v0.8.0): JSON I/O with schema version `rbfmax/v1`,
+  full double precision round-trip, nested schema structure for
+  forward-compatible evolution.
+
+### Numbers
+
+- **136 unit tests** (2–3 seconds on typical hardware)
+- **11 benchmark cases** (see DEVLOG Slice 09 for the measured table)
+- **14 chapters** of mathematical derivation
+- **8 tagged MINOR releases + 2 PATCH + 1 MAJOR** during Phase 1
+- **Branch protection enforced on `main`** (CI-required, linear
+  history, auto-delete feature branches after merge)
+
+### Unchanged
+
+- No breaking API changes from v0.8.0 → v1.0.0. v1.0.0 is a SemVer
+  MAJOR bump to mark the Phase 1 milestone and the start of API
+  stability guarantees. Future 1.x releases will add Phase 2
+  features (Maya node, Viewport 2.0, Qt6 UI) without breaking
+  existing callers.
+
+---
+
 ## [0.8.0] — 2026-04-20
 
 **Phase 1 · Slice 08 — JSON 序列化与 schema v1**
@@ -420,7 +485,8 @@ Phase 1 最大切片，落地项目首个**非 header-only 模块**与首个 STA
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/891458249/RBF_MAX/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/891458249/RBF_MAX/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/891458249/RBF_MAX/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...v0.6.0
