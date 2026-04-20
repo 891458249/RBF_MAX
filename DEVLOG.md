@@ -14,6 +14,92 @@
 
 ---
 
+## 2026-04-21 · Slice 10A — Maya devkit integration + mRBFNode skeleton (Phase 2A foundation)
+
+**Scope**: First Phase 2 slice. Establish the CMake / FindMaya toolchain, land a minimal `mRBFNode` that links the Phase 1 kernel into a Maya plugin, and prove the pipeline end-to-end via `mayapy` smoke. **Validation-only** — no RBF fit/predict exposure yet (that's Slice 11). No version bump; no tag.
+
+**Deliverables**
+- `cmake/MayaVersionMatrix.cmake` — maps `MAYA_VERSION` ∈ {2022, 2024, 2025, 2026} to `MAYA_CXX_STD` (14 for 2022, 17 for the rest) and defines `MAYA_DEVKIT_PROBE_PATHS` per platform.
+- `cmake/FindMaya.cmake` — handwritten module with explicit `MAYA_DEVKIT_ROOT` → `$ENV{MAYA_DEVKIT_ROOT}` → `$ENV{MAYA_LOCATION}` → probe path resolution. Exports `Maya::OpenMaya` / `Maya::OpenMayaAnim` / `Maya::Foundation` IMPORTED targets + aggregate `Maya::Maya`. Headers are SYSTEM-included.
+- `CMakeLists.txt` (top-level) — two new opt-in `BOOL` options: `RBF_BUILD_MAYA_NODE` and `RBF_BUILD_MAYA_ADAPTER_TESTS`. Both OFF by default so Phase 1 builds and existing CI remain untouched.
+- `maya_node/` subtree: CMake target `rbfmax_maya_node` (MODULE, `.mll` / `.so` / `.bundle`), adapter-core header, node skeleton (`mRBFNode`), generated `plugin_info.hpp`, 3 adapter tests, `mayapy` smoke script, subtree-local README.
+- DEVLOG entry (this entry).
+
+**Design decisions (15 locked pre-slice, D1–D15)**
+1. **D1 Devkit path management** — explicit `-DMAYA_DEVKIT_ROOT` wins; falls back through `$MAYA_DEVKIT_ROOT`, `$MAYA_LOCATION`, then `MAYA_DEVKIT_PROBE_PATHS`.
+2. **D2 FindMaya source** — handwritten (in-house owned) rather than third-party.
+3. **D3' Maya version anchor** — Maya 2022 (re-anchored from 2025 after pre-flight probe; see "Pre-execution environment probe & corrections" below).
+4. **D4' C++ standard** — `cxx_std_14` on the plugin target, `cxx_std_17` on the adapter tests. `adapter_core.hpp` kept C++14-compliant so it compiles under either.
+5. **D5 Directory layout** — `maya_node/{include,src,tests}/` mirrors the Phase 1 `kernel/` layout.
+6. **D6 CMake options** — two independent BOOLs rather than a single tri-state.
+7. **D7 compute() behaviour** — `gaussian(|x|, eps=1.0)`, so the smoke test exercises a real kernel call rather than a synthetic identity.
+8. **D8 typeId** — `0x00013A00` (= 80384, mid-range of the Autodesk dev range [0, 0x7FFFF]). The spec's initial draft `0x0013AB00` (= 1,288,960) was R-09-rejected before dispatch for exceeding the range.
+9. **D9 Test layering** — GoogleTest for native adapter, `mayapy` for the end-to-end contract; no redundancy.
+10. **D10 mayapy smoke contract** — 4 steps (loadPlugin / createNode / setAttr+getAttr+assert / delete+unloadPlugin).
+11. **D11 kernel linkage** — plugin links `rbfmax::kernel` only (header-only), **not** `rbfmax::solver`. Slice 10A does not need solver symbols and keeping them out of the plugin's link graph keeps the Phase 2A foundation smaller.
+12. **D12 Platform suffix** — `.mll` / `.bundle` / (empty → `.so`) set explicitly via target properties.
+13. **D13 Warning strategy** — Maya headers get `INTERFACE_SYSTEM_INCLUDE_DIRECTORIES` in `FindMaya.cmake`. `rbfmax_apply_warnings()` is deliberately NOT applied to the plugin target (deferred to Slice 10B+ behind `/external:W0`). Adapter tests DO honour the strict warning set.
+14. **D14 Version** — no bump, no tag. Project stays at 1.0.0 until Slice 11 lands real user-facing functionality.
+15. **D15 Random seed** — `0xF5BFA9u` reserved in `test_adapter_core.cpp` for future randomised adapter tests (Slice 11+). H1-H3 are deterministic and do not consume it.
+
+**Pre-execution environment probe & corrections**
+
+Two Section VI stop conditions fired during executor pre-flight check (slice proposed with Maya 2025 anchor; no code landed):
+
+1. **Maya 2025 devkit absent** — only Maya 2022 devkit present locally. Reviewer channel re-anchored D3 to Maya 2022 under shift-left validation principle (tightest C++ standard first). Phase 2A slice ordering revised to 10A=2022 → 10B=2024 → 10C=2025 → 10D=2026.
+2. **Spec API signature wrong** — `adapter_core.hpp` initial draft called `rbfmax::kernel_functions::evaluate(type, eps, r)`; actual Phase 1 public API is `rbfmax::evaluate_kernel(type, r, eps)` (flat namespace, r-before-eps). Verified against `kernel_functions.hpp:195` before any file was written.
+
+Additionally caught during spec drafting by R-09 self-check (reviewer channel):
+3. **typeId initial draft `0x0013AB00` exceeds Autodesk development range [0, 0x7FFFF]** — corrected to `0x00013A00` (= 80384, safely in mid-range) before dispatch.
+
+Phase 1 Retrospective flagged 5 prior spec-vs-code drifts; Slice 10A contributes items 6 and 7 to that list. New Phase 2 reviewer constraint: **every Phase 1 API reference in a spec must be grep-verified against the current kernel headers before dispatch**.
+
+**Additional executor observation (not a spec error, but notable)**
+
+Maya 2022's `<install>/devkit/` directory only contains a README pointing to a separate devkit download; the headers that ship with the main install live at `<install>/include/maya/` and import libs at `<install>/lib/`. `FindMaya.cmake` was therefore written to accept either layout via `PATH_SUFFIXES include devkit/include` and the parallel lib suffixes. Using `-DMAYA_DEVKIT_ROOT="C:/Program Files/Autodesk/Maya2022"` (the main install path, not a `/devkit` subpath) is the working invocation on this machine.
+
+**Tolerance register (R-09 audit)**
+- H1 `hello_transform(0) == 1.0` — exact equality; `exp(0) = 1.0` under IEEE 754.
+- H2 `hello_transform(1) ≈ exp(-1)` — `1e-14` absolute. Machine ε ≈ 2.22e-16; single `std::exp` ≤ 1-2 ULP ≈ 5e-16. `1e-14` leaves ~45× safety margin.
+- H3 `hello_transform(-x) == hello_transform(x)` — exact equality; `std::abs` is bit-exact, downstream arithmetic identical.
+- mayapy smoke assertion — `1e-12` absolute. Maya's DG marshals doubles bit-identically in theory; `1e-12` is the conservative upper bound against any internal formatting drift.
+
+**Tech-debt register additions**
+- **R-17** Maya 2022 ABI strict-ness (VS2019 vs VS2022 CRT mixing) — deferred to Slice 10D if it surfaces.
+- **R-18** `mayapy` path differences on Linux / macOS — deferred to Slice 10B/C/D environment-specific validation.
+- **R-19** `NOMINMAX` requirement on Windows (Maya `min`/`max` macros collide with Eigen / `std::min`) — **closed in Slice 10A** by setting `NOMINMAX` + `_CRT_SECURE_NO_WARNINGS` + `REQUIRE_IOSTREAM` on the plugin target.
+- **R-20** Handwritten `FindMaya.cmake` — **closed in Slice 10A**.
+- **R-21** Devkit path resolution priority — **closed in Slice 10A** (priority chain implemented in `FindMaya.cmake`).
+- **T-10** Development-range typeId (`0x00013A00`) is not safe for distribution; must request a permanent block from Autodesk before any public release beyond internal development.
+
+**Workflow note**
+- Branch: `slice-10a-maya-skeleton` → PR → CI (Phase 1 matrix only; Maya options default OFF so no CI change is needed) → human approve → rebase merge → auto-delete head branch.
+- No CHANGELOG change (no user-facing behaviour). No top-level README change (Phase 2 will update it when there is real user-facing behaviour to describe).
+- `.github/workflows/ci.yml` intentionally not modified: adapter-tests stay opt-in until Phase 2A stabilises.
+
+**Local verification** (Windows 11, MSVC 19.44.35223, Maya 2022 `C:/Program Files/Autodesk/Maya2022`)
+- Step 1 — `build-adapter` Release with `RBF_BUILD_MAYA_ADAPTER_TESTS=ON`: **139/139 green** (Phase 1 136 + HelloTransform H1/H2/H3; 2 by-design skips; 10.92s).
+- Step 2 — `build-maya-2022` Release with `RBF_BUILD_MAYA_NODE=ON MAYA_VERSION=2022 MAYA_DEVKIT_ROOT=<install root>`: `rbfmax_maya.mll` linked clean (0 warnings, 0 errors). 25,088 bytes.
+- Step 3 — `mayapy smoke_hellonode.py …/rbfmax_maya.mll`: **exit 0**. 4/4 contract steps passed. `compute(1.0) = 0.36787944117144233` matches `exp(-1)` bit-identically (`err=0.000e+00`).
+- Step 4 — `build` Release Phase 1 regression: **136/136 green** (unchanged from v1.0.0; 10.61s).
+
+**Two in-flight fixes discovered during executor verification** (captured here for audit; both rolled into the landed files)
+
+1. `FindMaya.cmake` initial draft did not set `Maya_<component>_FOUND` — `find_package_handle_standard_args(HANDLE_COMPONENTS)` inspects that exact variable name, so without it the first configure failed with "missing: OpenMaya OpenMayaAnim Foundation" even though `MAYA_<Comp>_LIBRARY` had resolved. Fixed by setting `Maya_${_comp}_FOUND` alongside each library variable.
+2. `plugin_main.cpp` initial draft followed the legacy Maya convention of wrapping `initializePlugin` / `uninitializePlugin` in `extern "C"`. Maya 2022's `MStatus` type lives in the inline namespace `Autodesk::Maya::OpenMaya20220000`, and MSVC strict mode rejects the combination with C2732 "linkage specification conflicts with an earlier specification". Dropped `extern "C"` in favour of plain `__declspec(dllexport)` / `__attribute__((visibility("default")))`; this is the Maya 2022+ devkit convention and the resulting C++-mangled symbols are resolved by Maya's loader through the inline-namespace ABI.
+
+Also: `cmds.unloadPlugin()` failed with "plugin still in use" after `cmds.delete(node)` because Maya's undo stack retained a reference. Added `cmds.flushUndo()` between delete and unload in the smoke script; this is the Autodesk-documented cleanup pattern for mayapy non-interactive sessions.
+
+A further local-env footnote: during the first mayapy invocation, a third-party Quixel MSLiveLink `userSetup.py` in the user's Python site-packages printed an unrelated traceback at import time. It did not propagate to our exit code (our smoke runs after the userSetup noise). Logged here so future runs are not mistaken for smoke failures.
+
+**Outstanding after Slice 10A**
+- **Slice 10B** — Maya 2024 validation + FindMaya patches if the 2024 devkit layout differs (expected small).
+- **Slice 10C** — Maya 2025.
+- **Slice 10D** — Maya 2026 + C++14 fallback `/Zc:__cplusplus` hardening for 2022 if issues surface.
+- **Slice 11** — real Phase 1 kernel tap: `mRBFNode` grows dynamic array attributes (centers, targets), `fit` / `predict` forwarding, `rbfmax::solver` link. Not blocked by 10B/C/D.
+
+---
+
 ## 2026-04-20 · Slice 09 — Benchmarks + v1.0.0 (Phase 1 finale)
 
 **Scope**: Phase 1 closing slice. Performance baseline, public documentation (README + LICENSE), and the v1.0.0 tag. No new functional code in kernel/solver/interpolator; this slice ships measurement infrastructure, publication-ready docs, and the Phase 1 retrospective.
