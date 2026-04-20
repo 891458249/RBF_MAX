@@ -14,6 +14,50 @@
 
 ---
 
+## 2026-04-21 · Slice 10C — Maya 2025 devkit validation
+
+**Scope**: Phase 2A validation slice. Activates the Maya 2025 branch of `cmake/MayaVersionMatrix.cmake` (`MAYA_CXX_STD=17`) and validates that the Slice 10A build chain works unchanged against the Maya 2025 devkit + Python 3.11 mayapy. Second of 4 Phase 2A version-matrix slices: **10A = 2022 ✅, 10C = 2025 ✅**, 10B = 2024 / 10D = 2026 still pending.
+
+**Deliverables**
+- `maya_node/README.md` — new "Build — Maya 2025" section + status table update to reflect 10A/10C both validated.
+- `DEVLOG.md` — this entry.
+- (No source code changes; 10A abstractions held up verbatim.)
+
+**Environment setup** (out-of-repo, recorded for audit)
+- Maya 2025 devkit relocated from `C:/Users/Administrator/Downloads/Autodesk_Maya_2025_3_Update_DEVKIT_Windows/devkitBase` to the canonical path `C:/SDK/Maya2025/devkitBase`. Same-drive `mv` — instant, no copy. The new path is space-free, Downloads-cleanup-proof, and parallels the future `C:/SDK/Maya2024` / `C:/SDK/Maya2026` layout.
+- Maya 2025 runtime: `C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe` with embedded Python **3.11.4** (vs Maya 2022's 3.7).
+
+**Design decisions (4 delta vs Slice 10A)**
+1. **10C-Δ1 — Activate `MAYA_CXX_STD=17` branch.** First real exercise of `MayaVersionMatrix.cmake`'s else-arm. `adapter_core.hpp` was deliberately written C++14-compatible in 10A, so no header code change was required. Confirmed at configure time: `Maya target version: 2025 (C++17)`.
+2. **10C-Δ2 — Python 3.11 mayapy.** Smoke script uses only Python 3.6-stable features (`from __future__ import print_function`, `.format()`, `os.path`, `maya.standalone`, `maya.cmds`, `sys.exit`). Zero adjustment.
+3. **10C-Δ3 — Maya 2025 inline namespace (`Autodesk::Maya::OpenMaya20250000`).** No impact: Slice 10A's F2 fix (dropping `extern "C"` in `plugin_main.cpp`) is version-agnostic because the trigger is the inline-namespaced return type, which every Maya 2022+ ABI has regardless of year.
+4. **10C-Δ4 — Devkit path convention.** Canonicalised to `C:/SDK/Maya2025/devkitBase` to stabilise against Downloads cleanup and match future 10B/10D layout. `MAYA_DEVKIT_PROBE_PATHS` in `MayaVersionMatrix.cmake` already contains `C:/Autodesk/Maya2025/devkit` but not `C:/SDK/...`; we rely on the higher-priority `-DMAYA_DEVKIT_ROOT=...` override rather than probing. Probe-path expansion for `C:/SDK` is deferred to Slice 10B/10D (when 2024/2026 devkits land in the same tree).
+
+**Validation outcomes** (Windows 11, MSVC 19.44.35223)
+- **Step 1** — `build-adapter` Release with `RBF_BUILD_MAYA_ADAPTER_TESTS=ON`: **139/139 green**, 11.60s. Phase 1 136 + HelloTransform H1/H2/H3. 2 by-design skips. Confirms Slice 10A basework survived main's post-10A advance (`9169772 → 859004d`).
+- **Step 2** — `build-maya-2025` Release with `RBF_BUILD_MAYA_NODE=ON MAYA_VERSION=2025 MAYA_DEVKIT_ROOT=C:/SDK/Maya2025/devkitBase`: `rbfmax_maya.mll` linked clean (**0 warnings, 0 errors**). 25,088 bytes — byte-identical size to the Maya 2022 output, which is expected: our source-level code is ABI-agnostic and the two devkits ship equivalent import libs for the symbols we reference.
+- **Step 3** — `mayapy smoke_hellonode.py …/rbfmax_maya.mll` with Maya 2025's `mayapy.exe` (Python 3.11.4): **exit 0**. 4/4 contract steps. `compute(1.0) = 0.36787944117144233` matches `exp(-1)` bit-identically (`err = 0.000e+00`). Unrelated Quixel MSLiveLink `userSetup.py` noise printed at startup (same as Slice 10A); does not affect exit code.
+- **Step 4** — `build` Release Phase 1 regression: **136/136 green**, 10.46s.
+
+**Tech-debt register**
+- **None new.** Phase 1 + 10A + 10C are all clean.
+- Note for 10B/10D: the `MAYA_DEVKIT_PROBE_PATHS` list in `cmake/MayaVersionMatrix.cmake` does not yet include `C:/SDK/Maya<ver>/devkitBase`. We preferred explicit `-DMAYA_DEVKIT_ROOT` over adding probe paths in 10C because (a) the `SDK/` convention is a workstation choice not a universal default and (b) probe expansion should happen when there is a concrete second example (10B or 10D) to avoid baking one user's layout into the shared defaults prematurely.
+
+**Cost-benefit realised**
+Slice 10C was the "low-LOC high-audit-value" slice the pre-slice strategic argument predicted. Zero source code changes, zero spec drift, zero in-flight fixes. The 10C-Δ1 through 10C-Δ4 list is an *accounting* exercise — each Δ was present in 10A's design but untested until 10C ran. Total executor time dominated by the four CMake/build/ctest/smoke commands, each of which ran first-try.
+
+**Workflow note**
+- Branch `slice-10c-maya2025-validation` → PR → CI (Phase 1 3 jobs; Maya options default OFF so CI remains green without Maya on the runners) → human approve → rebase merge → auto-delete head branch (T-09 continuing to hold).
+- No tag, no version bump (per 10A's D14).
+- Single commit sufficient: this slice is doc + validation only.
+
+**Outstanding after Slice 10C**
+- **Slice 10B** — Maya 2024 validation. Requires a Maya 2024 install + devkit; not on the dev machine currently. Non-blocking.
+- **Slice 10D** — Maya 2026 validation. Same prerequisite. Non-blocking.
+- **Slice 11** — mRBFNode real kernel integration (dynamic array attributes for centers/targets, `fit()` trigger, `predict()` in `compute()`, error propagation). Evaluated as Phase 2A's heaviest slice (18–22 decision points, 700–1200 LOC). Can proceed immediately now that the version matrix is 2/4 validated — Slice 11 will validate against both Maya 2022 and Maya 2025 in one shot thanks to 10C.
+
+---
+
 ## 2026-04-21 · Slice 10A — Maya devkit integration + mRBFNode skeleton (Phase 2A foundation)
 
 **Scope**: First Phase 2 slice. Establish the CMake / FindMaya toolchain, land a minimal `mRBFNode` that links the Phase 1 kernel into a Maya plugin, and prove the pipeline end-to-end via `mayapy` smoke. **Validation-only** — no RBF fit/predict exposure yet (that's Slice 11). No version bump; no tag.
