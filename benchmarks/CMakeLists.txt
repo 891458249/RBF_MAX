@@ -1,10 +1,12 @@
 # =============================================================================
-# benchmarks/CMakeLists.txt — Slice 05 skeleton
+# benchmarks/CMakeLists.txt — Slice 09 Google Benchmark suite
 # -----------------------------------------------------------------------------
-# Real benchmark sources (bench_*.cpp) will land in Slice 09. This file exists
-# now so that -DRBF_BUILD_BENCHMARKS=ON has a valid add_subdirectory target,
-# clearing the dangling reference at the top-level CMakeLists.txt that has
-# been outstanding since Slice 01 (R-06 in DEVLOG).
+# Only engaged when -DRBF_BUILD_BENCHMARKS=ON.  Fetches Google Benchmark on
+# demand (function defined in cmake/FetchDependencies.cmake), auto-discovers
+# bench_*.cpp, and links each against rbfmax::kernel + rbfmax_solver.
+#
+# Each source file already calls BENCHMARK_MAIN() so we link only the main
+# benchmark library (not benchmark_main).
 # =============================================================================
 
 if(NOT RBF_BUILD_BENCHMARKS)
@@ -14,19 +16,24 @@ endif()
 include(FetchContent)
 rbfmax_fetch_google_benchmark()
 
-# Auto-discover bench_*.cpp files; none exist yet (Slice 09 will add them).
+# Shared include path so bench_*.cpp can pick up common.hpp.
+set(RBFMAX_BENCH_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+# Auto-discover bench_*.cpp files.  Slice 09 ships bench_kernel/solver/predict.
 file(GLOB bench_sources "${CMAKE_CURRENT_SOURCE_DIR}/bench_*.cpp")
 if(bench_sources)
     foreach(src ${bench_sources})
         get_filename_component(name "${src}" NAME_WE)
         add_executable(${name} "${src}")
+        target_include_directories(${name} PRIVATE "${RBFMAX_BENCH_INCLUDE}")
         target_link_libraries(${name} PRIVATE
             rbfmax::kernel
-            rbfmax::solver
+            rbfmax_solver
             benchmark::benchmark
-            benchmark::benchmark_main
         )
         rbfmax_apply_warnings(${name})
+        # Benchmarks must use the same release tuning as production so the
+        # numbers reflect real deployment performance (LTO, /fp:precise, ...).
         rbfmax_apply_release_tuning(${name})
         set_target_properties(${name} PROPERTIES
             FOLDER "benchmarks"
