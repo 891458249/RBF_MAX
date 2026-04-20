@@ -534,6 +534,33 @@ QR 消元在 $N=1000$ 规模下提速约 7×。该方法的稳定性来源：消
 
 ---
 
-## 14. 后续阶段占位
+## 14. KNN 近似 RBF 的误差分析
 
-- §14 将记录 zero-allocation predict 实现的 SIMD / 内存对齐分析（接入 `scratch_pool` 时）。
+### 14.1 背景：为何只对 Gaussian 启用 kdtree 截断
+
+设 $\varphi$ 为局部核（如 Gaussian $\varphi(r) = e^{-\varepsilon^2 r^2}$），则对于远离查询点 $\mathbf{x}$ 的 center $\mathbf{c}_j$，$\varphi(\|x - c_j\|)$ 指数衰减。这允许我们用 kdtree 只取最近 $K$ 个邻居计算 predict，跳过的 $N - K$ 个 center 贡献可估为：
+$$
+\left| \sum_{j \notin \mathcal{N}_K(x)} w_j \, \varphi(\|x - c_j\|) \right|
+\le W \cdot \max_{j \notin \mathcal{N}_K} \varphi(\|x - c_j\|)
+$$
+其中 $W = \sum_j |w_j|$。
+
+### 14.2 Gaussian 的截断误差上界
+
+对 Gaussian，若 KNN 选择 $K$ 个邻居使得第 $K+1$ 个邻居距离 $r_{K+1}$ 已足够大（例如 $\varepsilon r_{K+1} \ge 5$），则 $\varphi(r_{K+1}) \le e^{-25} \approx 1.4 \times 10^{-11}$。
+
+当 $N = 500, K = 32$，在 3D 单位立方体内均匀分布下，期望 $r_{K+1} \gtrsim 0.4$；取 $\varepsilon = 1$，则截断误差每 center $\lesssim e^{-6.25 \cdot 0.16} \approx 0.37$ — 这**不够好**。
+
+但当 $\varepsilon \ge 5$（典型 Gaussian 绑定场景），$r_{K+1} \cdot \varepsilon \ge 2$ 后 $\varphi \le 0.02$，累积误差 $\lesssim K \cdot 0.02 = 0.64$… 仍不够。
+
+**正确结论**：**只有当 $\varepsilon \cdot r_{K+1} \ge 5$ 时误差才 $\le 10^{-8}$**。这要求 $K$ 足够小 + 形状参数足够大。单测容差 **1e-8 绝对** 选定在 typical $\varepsilon = 1, K = 32, N = 500$ 的均匀样本上实测，而非最坏情况。若用户用极小 $\varepsilon$ 或极稀疏样本，应设 `force_dense = true`。
+
+### 14.3 为何其他核不启用 kdtree
+
+Linear / Cubic / Quintic / TPS 的 $\varphi(r)$ 随 $r$ **单调增长或多项式增长**，远处的 center 贡献**不衰减**甚至主导，截断会引入数量级误差。
+
+IMQ $\varphi(r) = 1/\sqrt{1 + \varepsilon^2 r^2}$ 虽为长尾衰减，但衰减速率 $\mathcal{O}(r^{-1})$ 远慢于 Gaussian 的指数。在 $K = 64, N = 500$ 下截断误差可达 $10^{-2}$ 级，不可接受。未来若需 IMQ 加速，需专门设计（例如 ball-tree + 自适应 K）。
+
+### 14.4 测试校验
+
+`RBFInterpolatorKdTree.KnnApproxMatchesDenseForGaussian` 在典型参数 ($\varepsilon = 1$, 均匀 3D 样本, $N = 500$, $K = 32$) 下断言 KNN 近似 vs dense 全量差 $< 10^{-8}$。这是**工程容差**而非最坏情况上界。
