@@ -1,0 +1,129 @@
+# rbfmax Maya plugin — Slice 10A skeleton
+
+Phase 2A foundation: CMake + devkit integration + `mRBFNode` skeleton +
+adapter-core that links the Phase 1 kernel into a Maya plugin.
+
+**Slice 10A scope is validation-only.** The node has two scalar doubles
+(`inputValue` / `outputValue`) and routes input through the Phase 1
+Gaussian kernel to prove the toolchain works end-to-end. Real
+`fit` / `predict` forwarding with dynamic array attributes lands in
+Slice 11.
+
+## Supported Maya versions
+
+| Slice | Maya | C++ std | Status |
+|------:|-----:|:-------:|:------:|
+| 10A   | 2022 |  C++14  | this slice (shift-left ABI anchor) |
+| 10B   | 2024 |  C++17  | queued |
+| 10C   | 2025 |  C++17  | queued |
+| 10D   | 2026 |  C++17  | queued |
+
+Only Maya 2022 is verified locally for Slice 10A. 10B / 10C / 10D will
+validate the remaining versions and patch `FindMaya.cmake` if devkit
+layouts differ.
+
+## Build — adapter tests (no Maya devkit required)
+
+Pure-C++ adapter tests run on any CI node and cover the kernel-linking
+layer. They are the CI-compatible half of Slice 10A.
+
+```bash
+cmake -S . -B build-adapter \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DRBF_BUILD_MAYA_ADAPTER_TESTS=ON
+cmake --build build-adapter -j
+ctest --test-dir build-adapter --output-on-failure
+```
+
+This adds 3 TEST blocks (`HelloTransform.H1/H2/H3`) to the Phase 1 136,
+yielding **139 tests green**.
+
+## Build — Maya plugin (requires devkit)
+
+```bash
+cmake -S . -B build-maya-2022 \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DRBF_BUILD_MAYA_NODE=ON \
+      -DMAYA_VERSION=2022 \
+      -DMAYA_DEVKIT_ROOT="C:/Program Files/Autodesk/Maya2022"
+cmake --build build-maya-2022 -j --config Release
+```
+
+The output is `build-maya-2022/bin/rbfmax_maya.mll` (Windows),
+`rbfmax_maya.so` (Linux), or `rbfmax_maya.bundle` (macOS).
+
+### `MAYA_DEVKIT_ROOT` resolution order
+
+`FindMaya.cmake` searches for `maya/MFn.h` under the following paths
+(first match wins):
+
+1. `-DMAYA_DEVKIT_ROOT=<path>` — explicit cache variable.
+2. `$MAYA_DEVKIT_ROOT` — exported environment variable.
+3. `$MAYA_LOCATION` — Autodesk's native env var, usually the main
+   Maya install.
+4. `MAYA_DEVKIT_PROBE_PATHS` from `cmake/MayaVersionMatrix.cmake`
+   (platform-specific defaults for the requested `MAYA_VERSION`).
+
+Both of these root layouts are accepted:
+- `<ROOT>/include/maya/MFn.h` (Maya's bundled headers)
+- `<ROOT>/devkit/include/maya/MFn.h` (separate devkit download)
+
+The Maya 2022 install ships headers in the first layout; the
+standalone devkit archive ships them in the second.
+
+## mayapy smoke test
+
+After building the plugin, run the 4-step smoke contract
+(`loadPlugin` → `createNode` → `setAttr` + assert → `unloadPlugin`):
+
+```bash
+"C:/Program Files/Autodesk/Maya2022/bin/mayapy.exe" \
+    maya_node/tests/smoke/smoke_hellonode.py \
+    build-maya-2022/bin/rbfmax_maya.mll
+echo "exit code: $?"   # must be 0
+```
+
+Expected output (abridged):
+
+```
+[1/4] loadPlugin OK: build-maya-2022/bin/rbfmax_maya.mll
+[2/4] createNode OK: mRBFNode1
+[3/4] compute(1.0) = 0.36787944117144233 vs expected 0.36787944117144233 (err=0.000e+00) OK
+[4/4] delete + unloadPlugin OK
+
+=== Slice 10A mayapy smoke: PASS ===
+```
+
+The Python-side assertion uses a `1e-12` absolute tolerance (see
+docstring rationale). The native-side adapter tests use `1e-14`.
+
+## Known limitations (Slice 10A)
+
+- **Development-range typeId**: `0x00013A00`. This ID is valid for
+  internal development only and **must not be distributed**. Registering
+  a production plugin requires requesting a permanent block from
+  Autodesk (`typeId` registration). Logged as tech-debt item **T-10**
+  in `DEVLOG.md`.
+- **No strict warnings on the plugin target**: `rbfmax_apply_warnings()`
+  is deliberately not applied to `rbfmax_maya_node` because MSVC `/WX`
+  still bites on some Maya macro expansions even when headers are
+  SYSTEM-included. Slice 10B+ will reintroduce strict warnings behind
+  `/external:W0` (MSVC ≥ 16.10) or `-isystem` on Clang/GCC. Adapter
+  tests do honour the strict warning set.
+- **No dynamic array attributes yet** — Slice 11 adds per-sample centers
+  and targets as Maya array attributes.
+- **No Maya 2024/2025/2026 validation** — see the version table above.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `CMakeLists.txt` | Plugin target + adapter test gate |
+| `include/rbfmax/maya/adapter_core.hpp` | Pure-C++, C++14-compliant, calls Phase 1 `evaluate_kernel` |
+| `include/rbfmax/maya/mrbf_node.hpp` | `MPxNode` skeleton class declaration |
+| `include/rbfmax/maya/plugin_info.hpp.in` | CMake-configured constants (version, typeId) |
+| `src/mrbf_node.cpp` | `compute()` + attribute wiring |
+| `src/plugin_main.cpp` | `initializePlugin` / `uninitializePlugin` |
+| `tests/CMakeLists.txt` | Adapter test target |
+| `tests/test_adapter_core.cpp` | 3 TEST blocks (H1/H2/H3) |
+| `tests/smoke/smoke_hellonode.py` | `mayapy` 4-step contract |
