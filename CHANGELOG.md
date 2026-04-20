@@ -14,6 +14,73 @@ _尚无未发布变更。_
 
 ---
 
+## [0.8.0] — 2026-04-20
+
+**Phase 1 · Slice 08 — JSON 序列化与 schema v1**
+
+新增持久化层。首次真正消费 `nlohmann/json` 依赖（`FetchDependencies.cmake`
+里自 Slice 02.5 起一直存在的 deferred fetch function 现在被启用）。
+为 Maya 节点的训练状态保存 / 加载、跨进程传输、CI 回归基线快照打下
+基础。
+
+### 新增 (Added)
+
+- **`rbfmax::io_json::save / load`** — 自由函数，在 schema 标签
+  `rbfmax/v1` 下序列化 / 反序列化 `(InterpolatorOptions, FitResult)` 对。
+  嵌套结构（meta / config / training / data），便于未来 v2 演进。
+- **`RBFInterpolator::save(path)` / `RBFInterpolator::load(path)`** —
+  类成员便利方法，委托到 io_json 自由函数。`load()` 失败时
+  interpolator 状态保持不变（atomic update 契约）。
+- **`docs/schema_v1.md`** — 规范化 schema 文档，含字段语义表、已知
+  限制、未来 v2/v3 升级规则（"never delete prior parse_vN_json"）。
+- **`nlohmann/json` v3.11.3** — 首次真正链接进 `rbfmax_solver` STATIC
+  库 PUBLIC 依赖；下游所有 `rbfmax::solver` 用户均能透明使用。
+- **14 个新测试**（test_io_json.cpp，A-E 五类），项目测试总数达 136。
+  随机种子 `0xF5BFA7u`。
+
+### 工程 (Build)
+
+- 顶层 CMake 项目版本 `0.7.0 → 0.8.0`。
+- `kernel/src/io_json.cpp` 加入 `rbfmax_solver` STATIC 源列表。
+- `target_link_libraries(rbfmax_solver PUBLIC ...)` 追加
+  `nlohmann_json::nlohmann_json`。
+- `tests/CMakeLists.txt` 注册 `test_io_json` 并扩展条件链接：
+  `test_solver` / `test_interpolator` / `test_io_json` 都 PRIVATE
+  link `rbfmax::solver`。
+
+### 契约 (Contracts)
+
+- **schema 锁定**：`rbfmax/v1` 现为永久承诺。任何 v1 文件的 reader
+  必须保留；future v2 通过新增 `parse_v2_json` + `load` 内的 dispatch
+  分支实现，绝不修改或删除 `parse_v1_json`。
+- **NaN/Inf 有损**：JSON 规范不支持 IEEE 特殊值，写入时 NaN/+Inf/-Inf
+  统一为 JSON `null`，读取时 null → NaN（Inf 的符号与无穷性丢失）。
+  已写入 `docs/schema_v1.md` 与测试 `IoJsonFidelity.NanAndInfAreLossy
+  ConvertedToNaN`。
+- **原子更新**：`load()` 失败时 `out_*` 参数保持调用前状态不变，
+  仅在完整解析成功后才提交。`RBFInterpolator::load()` 同理。
+
+### 不变 (Unchanged)
+
+- Slice 01–07 全部 API 二进制兼容。Interpolator 仅追加 2 个新方法，
+  其它签名保持不变。
+
+### 已知限制
+
+- NaN/Inf 在 FitResult 字段中的有损转换（见上）。
+- 大 rig（N > 5000）下 JSON 文件可达数 MB；如成为瓶颈，未来 v2
+  可考虑可选二进制 sidecar（MessagePack / CBOR），保持 JSON 信封
+  作为审计入口。
+
+### Phase 1 进度
+
+- 9/9 feature slices 完成（100%）。
+- 剩余：Slice 09（benchmarks，含 ScratchPool 零分配验证 + fit/predict
+  wall-clock 基线）。
+- v1.0.0 在 Slice 09 收官时发布。
+
+---
+
 ## [0.7.0] — 2026-04-20
 
 **Phase 1 · Slice 07 — RBFInterpolator 门面类（Phase 1 收官集成切片）**
@@ -353,7 +420,8 @@ Phase 1 最大切片，落地项目首个**非 header-only 模块**与首个 STA
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/891458249/RBF_MAX/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/891458249/RBF_MAX/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...v0.5.0
