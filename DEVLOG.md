@@ -14,6 +14,121 @@
 
 ---
 
+## 2026-04-20 · Slice 09 — Benchmarks + v1.0.0 (Phase 1 finale)
+
+**Scope**: Phase 1 closing slice. Performance baseline, public documentation (README + LICENSE), and the v1.0.0 tag. No new functional code in kernel/solver/interpolator; this slice ships measurement infrastructure, publication-ready docs, and the Phase 1 retrospective.
+
+**Deliverables**
+- `benchmarks/common.hpp` — deterministic synthetic-data helpers (`generate_uniform_cube`, `synthesize_targets`), seed `0xF5BFA8u`.
+- `benchmarks/{bench_kernel, bench_solver, bench_predict}.cpp` — 11 Google Benchmark cases across 3 groups.
+- `benchmarks/CMakeLists.txt` — rewritten from the Slice 05 skeleton: each `bench_*.cpp` supplies its own `BENCHMARK_MAIN()`, so we link `benchmark::benchmark` only (no `benchmark_main`). `benchmarks/.gitkeep` removed.
+- `.github/workflows/ci.yml` — new `benchmark-smoke` job (Ubuntu 22.04 + GCC 11), only triggered by `workflow_dispatch` or version tag push. Daily PR CI unchanged.
+- `README.md` — project-first public README (rewritten from the Slice 01 draft that stopped at v0.1.0), ~200 lines covering status, quick start, architecture diagram, feature list, build instructions, reference performance table, design decisions, roadmap, license pointer.
+- `LICENSE` — Apache License 2.0 full text with "Copyright 2026 891458249" notice.
+- Top-level CMake `VERSION 0.8.0 → 1.0.0`.
+
+**Design decisions (9 locked pre-slice)**
+1. **Benchmark scope: 11 cases in 3 groups** (kernel primitives / solver training / predict hot path). Each group in its own `.cpp`.
+2. **CI benchmark strategy: opt-in** (`workflow_dispatch` + tag push only). Keeps PR CI fast; performance checks on demand / at release.
+3. **README scale: middleweight** (~200 lines). Not a landing page, not a 30-line minimal — consistent with industrial-plugin scope.
+4. **License: Apache 2.0**. Patent grant + industrial-software standard. Verified compatible with all fetched dependencies (Eigen MPL 2.0, GTest BSD 3-Clause, nlohmann/json MIT, Google Benchmark Apache 2.0).
+5. **Benchmark file organisation: three `.cpp` + one `common.hpp`**. Rejected single-file variant as future Phase 2/3 benchmarks would become unwieldy.
+6. **Synthetic data seed: `0xF5BFA8u`** (sequential after Slice 08's `0xF5BFA7u`).
+7. **Performance target location: README reference table + DEVLOG detailed table.** README shows engineering ranges ("~0.5–1 μs"); DEVLOG lists exact measured numbers.
+8. **v1.0.0 release: manual GitHub Release after tag push.** Automated release generation is a Phase 2 nice-to-have.
+9. **Tech-debt: not cleared in Phase 1; explicit handoff to Phase 2** with per-item disposition in the retrospective table below.
+
+**Measured performance** (MSVC 19.44, Windows 11, Release, 28-core Intel-class CPU @ 3.4 GHz, `--benchmark_min_time=0.01s`)
+
+| Benchmark                               | Mean time |
+|-----------------------------------------|-----------|
+| `BM_Kernel_Gaussian`                    | 2.90 ns   |
+| `BM_Kernel_ThinPlateSpline`             | 2.74 ns   |
+| `BM_Kernel_Dispatch`                    | 2.92 ns   |
+| `BM_Fit_Gaussian_N100`                  | 129 μs    |
+| `BM_Fit_Gaussian_N1000`                 | 25.3 ms   |
+| `BM_Fit_Gaussian_N1000_GCV`             | 445 ms    |
+| `BM_Predict_Gaussian_N100`              | 2.30 μs   |
+| `BM_Predict_Gaussian_N1000_Dense`       | 23.5 μs   |
+| `BM_Predict_Gaussian_N1000_KdTree`      | 1.43 μs   |
+| `BM_Predict_ScratchPool` (N=500)        | 11.1 μs   |
+| `BM_Predict_Regular_N500`               | 11.2 μs   |
+
+**Two honest observations from the measured data**
+
+1. **Sub-1 μs target missed by ~43 %**. The kd-tree predict at N=1000 clocks **1.43 μs** against the blueprint's "<1 μs" goal. Not dramatic, but not met either. Likely contributors: `spatial::KdTree::knn_search`'s `std::priority_queue<pair<Scalar, Index>>` heap allocates internally on every call, and the MSVC Release build keeps `eigen_assert` checks active in the KNN inner loop. Not blocking for v1.0.0; Phase 2 may switch to a stack-array max-heap + `NDEBUG`-gated contracts.
+2. **ScratchPool shows no measurable advantage at N=500** (11.1 μs vs 11.2 μs for the convenience `solver::predict`). Interpretation: MSVC Release fully inlines the per-call `ScratchPool` construction in `predict()`, so the only remaining allocation is the returned `VectorX`, which both paths share. Slice 06's zero-allocation claim holds in theory but is invisible at this size because the inner kernel evaluation (N = 500 exp calls) dominates. True validation of ScratchPool's value would require a repeated-predict loop in a tight scheduler (e.g. Maya 60 fps compute()), and an out-parameter API that eliminates the final `VectorX` return alloc. Both items queued for Phase 2.
+
+**Local-verification surprise**
+- Google Benchmark sub-build took ~49 s on first `--fresh` configure (vs the main build's <2 s) — the FetchContent populate + benchmark's own CMake configure introduces measurable latency even on a cached git clone. CI's `actions/cache` keyed on `FetchDependencies.cmake + benchmarks/CMakeLists.txt` hash will amortise this after the first run. No code change needed.
+
+**Tech-debt register**
+- None new.
+- Slice 06 P6 (ScratchPool allocation-count proof) remains open — the measurement at N=500 was inconclusive. Escalated to Phase 2 with the out-parameter `predict_into(...)` API as the concrete technique.
+
+---
+
+## Phase 1 Retrospective
+
+**Timeline**: 2026-04-19 (Slice 01 v0.1.0) → 2026-04-20 (v1.0.0). Compressed calendar; real calendar time dominated by design reviews and spec iteration, not code.
+
+**Slices shipped**: 8 feature + 2 CI (02.5, 02.5.1) + 1 finale = **11 iterations**.
+
+**Git releases** (11 tags):
+v0.1.0 → v0.2.0 → v0.2.1 → v0.2.2 → v0.3.0 → v0.4.0 → v0.5.0 → v0.6.0 → v0.7.0 → v0.8.0 → **v1.0.0**.
+
+**Code inventory (approx, at v1.0.0)**:
+- `kernel/` headers + sources: ~3500 LOC
+- `tests/`: ~2500 LOC (136 TEST blocks)
+- `benchmarks/`: ~280 LOC (11 cases)
+- `docs/` (math + schema): ~1200 LOC markdown
+- `CMakeLists.txt` + `cmake/` + `.github/workflows/`: ~500 LOC infra
+
+**What went well**
+- **Pre-slice design review caught most ambiguity before code was written.** 15+ decision points per slice flagged explicitly and frozen in DEVLOG before the executor channel started work. The slice body almost never hit a "what should this do?" question mid-implementation.
+- **R-09 protocol** (arithmetic self-check before dispatching numeric recommendations) matured through real failures — Slice 02's tolerance slip (`theta * 2e-7` that actually evaluates *tighter* than the original `1e-12`), Slice 07's three-way spec-vs-math contradiction (1e-8 KNN accuracy demanded in C2 while §14 proved it unreachable at ε=1). R-09 is now standard: every tolerance number gets substituted into its bound expression and mentally evaluated before being written to spec.
+- **CI matrix caught latent C++11 bugs** in Slice 01 that would have silently leaked otherwise (KernelParams aggregate rules, R-11). One CI round saved one debugging session.
+- **Feature branch + PR + branch protection + auto-delete** stabilised after Slice 07. From Slice 08 onward, zero friction: PR opens, CI runs, merge, auto-delete, tag. Takes ~5 min of human attention per slice.
+
+**What to improve in Phase 2**
+- **Spec pre-validation rigor.** The reviewer channel (me, in the spec voice) introduced at least 5 spec errors during Phase 1 that the executor channel (me, in the code voice) caught during implementation:
+  - `EIGEN_ASSERT` vs `eigen_assert` casing (Slice 03)
+  - Debug directory assumption (Slice 02)
+  - `theta * 2e-7` tolerance that's tighter than the prior 1e-12 (Slice 02)
+  - Three tolerance numbers off-by-orders-of-magnitude in Slice 07 (B2, C2, G1)
+  - Slice 08 `std::getenv` under `/WX` (caught at build, not spec)
+  Fix: the reviewer channel should run a "mental dry run" before dispatching — mentally execute each step, check every numeric claim against a written derivation, cross-reference test tolerances with the math chapters *in the same spec*.
+- **R-09 extension**: now codified as "any `(tolerance, bound)` pair in the same spec must satisfy `tolerance ≥ bound × safety_margin`, substitutions checked on paper before dispatch". Written into the Phase 2 executor protocol.
+- **Branch protection initial setup** had self-approve deadlock (T-08) and required GitHub UI tweaks (required review count 0 for single-contributor). Should be anticipated for any new protected-branch setup; added to Phase 2 entry conditions.
+- **PR merge housekeeping**: the "click Delete branch" step was missed on Slice 05, 06, 07 consecutively. Fixed permanently by enabling "Automatically delete head branches" at repo level (T-09, verified working by Slice 08 tag closeout). Lesson: enable auto-delete on any new repo before the first PR.
+
+**Tech-debt register carried into Phase 2**
+
+| ID   | Description                                             | Plan                                             |
+|------|---------------------------------------------------------|--------------------------------------------------|
+| R-01 | CMP0169 OLD policy (Eigen 3.4 upgrade)                  | Address when Eigen 3.3 EOL                       |
+| R-05 | `kernel_type_from_string` first-char switch collisions  | Rewrite when adding Wendland / Matern kernels    |
+| R-10 | Eigen GitLab mirror fallback                            | No-op until observed flakiness                   |
+| R-11 | MSVC permissive C++14 aggregates under `/std:c++11`     | Observational; CI catches                        |
+| R-12 | Node 20 → Node 24 deprecation (2026-06)                 | Upgrade actions when v5 series ships             |
+| R-13 | GCC `-Wunused-function` vs MSVC silence                 | Observational; CI catches                        |
+| R-15 | Local cmake version mixing causes "Comeau" error        | Document in contributor guide                    |
+| R-16 | nlohmann_json FetchContent sub-build flake (Win + VS)   | Document local workaround (SOURCE_DIR override)  |
+| T-04 | `docs/math_derivation.md` §6 numbering gap              | Cosmetic; fold into future math edit             |
+| T-06 | "Require branches up to date" off (single-contributor)  | Enable when second contributor joins             |
+| T-07 | A6 death test not implemented (eigen_assert coverage)   | Revisit when death test harness is built         |
+| —    | KdTree sub-1 μs target missed by ~43 % (Slice 09 obs.)  | Phase 2: stack-array heap + `NDEBUG`-gated asserts |
+| —    | ScratchPool measurable benefit needs out-param API      | Phase 2: `predict_into(out, fr, x, pool)`        |
+
+**Phase 2 Entry Conditions**
+
+- Maya devkit environment setup (separate slice, not part of Phase 2's first feature slice).
+- Decision on Maya version matrix (2022 / 2024 / 2025 / 2026).
+- Decision on Qt6 binding (PySide6 stock vs Shiboken6 custom).
+- **Required reading for any new collaborator before code changes**: this DEVLOG (every slice decision), `docs/math_derivation.md` (§1–14 numeric contract), `docs/schema_v1.md` (permanent on-disk format). Phase 1 decisions are committed, not suggestions — they are the contract that made v1.0.0 possible and will be the reference point for every v1.x / v2.x decision to come.
+
+---
+
 ## 2026-04-20 · Slice 08 — JSON I/O with schema v1 (v0.8.0)
 
 **Scope**: Persistence layer for trained interpolators. First real consumer of the `nlohmann/json` dependency that has been a deferred fetch function in `cmake/FetchDependencies.cmake` since Slice 02.5. Closes the last functional gap before the Slice 09 benchmark + v1.0.0 finale.
