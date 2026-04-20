@@ -1,109 +1,181 @@
 # RBF_MAX
 
-> 工业级 Autodesk Maya 径向基函数（Radial Basis Function）插值插件
-> **当前状态**：`v0.1.0` · Phase 1 Slice 01 · 尚未可用于 Maya 集成
+Industrial-grade Radial Basis Function interpolation kernel for
+Autodesk Maya and game engines.
 
-RBF_MAX 以纯 C++11 数学内核为基石，向上构建 Maya 并行评估节点、Viewport 2.0 实时可视化、以及 Qt6 现代化 UI，服务于 3A 级影视与游戏项目中的角色绑定（Rigging）姿态空间变形需求。
+[![CI](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml/badge.svg)](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/891458249/RBF_MAX/releases/tag/v1.0.0)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+[![C++](https://img.shields.io/badge/C%2B%2B-11-orange)](https://en.cppreference.com/w/cpp/11)
 
----
+## Status
 
-## 项目状态矩阵
+**Phase 1 complete (v1.0.0).** This release delivers the pure C++
+mathematical kernel, solver, spatial index, and I/O layer — the
+"math foundation" of the plugin. The kernel is Maya-free and
+engine-agnostic: it links against Eigen 3.3.9 and nlohmann/json,
+with GoogleTest as the test dependency and Google Benchmark as the
+optional performance suite.
 
-| 阶段 | 模块 | 状态 |
-|---|---|---|
-| **Phase 1** Math Kernel (pure C++11) | 核函数 ✅ · 距离度量 ⏳ · 四元数 ⏳ · KD-Tree ⏳ · 求解器 ⏳ · I/O ⏳ · Benchmark ⏳ | 🚧 进行中 |
-| **Phase 2** Maya DG Node | `MPxNode`, TBB, `kParallel` 调度 | 未启动 |
-| **Phase 3** Viewport 2.0 Draw | `MPxDrawOverride`, `MUIDrawManager`, 热力图 | 未启动 |
-| **Phase 4** Qt6 UI | PySide2/PySide6 双版本兼容，Model/View | 未启动 |
+**Phase 2** (Maya node integration, Viewport 2.0 visualization,
+Qt6 UI) is planned as a follow-on project.
 
----
+## Quick Start
 
-## 设计原则
+```cpp
+#include <rbfmax/interpolator.hpp>
 
-1. **严格跨版本兼容**：Maya 2018 ↔ 2025.3，双平台 Windows + Linux。
-2. **底层数学与宿主解耦**：`kernel/` 下的代码零 Maya / Qt 依赖，可直接导入 UE5 / Houdini / 纯 CLI 工具。
-3. **ABI 风险清零**：TBB 强制使用 Maya 捆绑版本；禁用任何与 Maya USD 的 protobuf 冲突。
-4. **NaN/Inf 透明传播**：数学错误必须早期暴露，禁止 `fast-math` 默认开启。
-5. **数据驱动**：所有状态序列化为 JSON（nlohmann/json，header-only），版本化兼容。
+using namespace rbfmax;
 
----
+// 1. Configure: Gaussian kernel, auto polynomial tail
+InterpolatorOptions opts(KernelParams(KernelType::kGaussian, 1.0));
+RBFInterpolator rbf(opts);
 
-## 仓库结构
+// 2. Train on sample centers and targets
+MatrixX centers = ...;  // N × 3 samples in pose space
+MatrixX targets = ...;  // N × M target values to interpolate
+rbf.fit(centers, targets);  // GCV auto-lambda by default
 
-```
-RBF_MAX/
-├── kernel/                 # 纯 C++11 数学内核（阶段一）
-│   └── include/rbfmax/     # 公开头文件
-├── maya/                   # Maya DG 节点与 Viewport 2.0（阶段二、三，待创建）
-├── scripts/                # Python UI、MVC 控制器、UE 导出器（阶段四）
-├── tests/                  # GoogleTest 单元测试
-├── benchmarks/             # Google Benchmark 性能基准（阶段一尾声）
-├── docs/                   # 架构与数学推导
-│   └── math_derivation.md
-├── cmake/                  # CMake 模块（编译器标志、依赖拉取）
-├── CMakeLists.txt
-├── CHANGELOG.md            # 面向用户的变更日志
-├── DEVLOG.md               # 面向开发的切片级日志
-├── COMMIT_CONVENTION.md    # 提交规范（Conventional Commits）
-└── README.md               # 本文件
+// 3. Predict in the hot loop (allocation-free)
+VectorX query = ...;
+VectorX out = rbf.predict(query);
+
+// 4. Save for later reuse
+rbf.save("rig.rbf.json");
 ```
 
----
+## Architecture
 
-## 构建（本地验证，阶段一）
+Eight independent modules composed into a single `RBFInterpolator`:
 
-**Windows · MSVC 2022**
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release -- /m
-ctest --test-dir build -C Release --output-on-failure
+```
+┌─────────────────────────────────────────────────────┐
+│  RBFInterpolator (facade, rbfmax::)                 │
+│  ─────────────────────────────────────────────────  │
+│  • fit() / predict() / save() / load() / clone()    │
+└────────────────────┬────────────────────────────────┘
+                     │
+     ┌───────────────┼────────────────┐
+     │               │                │
+┌────▼────┐   ┌──────▼──────┐   ┌────▼────────┐
+│ solver  │   │   spatial   │   │   io_json   │
+│ (fit,   │   │  (kd-tree,  │   │  (schema v1)│
+│ predict)│   │    KNN)     │   │             │
+└────┬────┘   └─────────────┘   └─────────────┘
+     │
+┌────▼──────────────────────────────────┐
+│ kernel / distance / rotation / types  │
+│ (6 kernels, Euclidean + quaternion,   │
+│  Swing-Twist, Log/Exp maps)           │
+└───────────────────────────────────────┘
 ```
 
-**Linux · GCC 11**
+See [docs/math_derivation.md](docs/math_derivation.md) for the full
+mathematical derivations (14 chapters) and
+[docs/schema_v1.md](docs/schema_v1.md) for the JSON schema spec.
+
+## Features
+
+- **6 radial basis kernel functions**: Linear, Cubic, Quintic,
+  Thin-Plate Spline, Gaussian, Inverse Multiquadric.
+- **Tikhonov regularization** with GCV auto-lambda selection
+  (SVD closed-form over a 50-point log-uniform grid).
+- **QR elimination** for polynomial-tail augmented systems — turns
+  the indefinite saddle-point system into an SPD subsystem solvable
+  by LLT.
+- **Three-tier solver fallback**: LLT → LDLT → BDCSVD, with the
+  condition number reported on the SVD path.
+- **kd-tree KNN acceleration** for Gaussian kernels at N ≥ 256
+  (other kernels traverse all centers to preserve exact results).
+- **Quaternion algebra**: Swing-Twist decomposition, Log/Exp maps
+  between SO(3) and its Lie algebra ℝ³, with double-cover
+  shortest-path handling.
+- **Zero-allocation predict hot path** via `ScratchPool` — pre-
+  allocated Eigen buffers reused across calls; validated by Slice 09
+  benchmarks.
+- **JSON persistence** (schema `rbfmax/v1`) with full double
+  precision round-trip and forward-compatible upgrade path.
+- **Strict numerical contract**: double precision internally,
+  explicit NaN propagation, `eigen_assert`-guarded preconditions,
+  `noexcept` throughout.
+
+## Building
+
+Requirements: CMake ≥ 3.14, C++11 compiler. Tested on MSVC 17.x
+(Visual Studio 2022) and GCC 11 (Ubuntu 22.04). Dependencies are
+fetched automatically via CMake FetchContent (Eigen 3.3.9,
+GoogleTest 1.12.1, nlohmann/json 3.11.3, Google Benchmark 1.8.3 on
+demand).
 
 ```bash
+# Configure
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+
+# Build (kernel + solver + tests)
+cmake --build build -j
+
+# Run tests (136 test cases, 2-3 seconds)
 ctest --test-dir build --output-on-failure
 ```
 
-**构建选项**
+Enable benchmarks (Google Benchmark is fetched only on demand):
 
-| 选项                     | 默认 | 说明                                           |
-|--------------------------|------|------------------------------------------------|
-| `RBF_BUILD_TESTS`        | ON   | 拉取 GoogleTest 1.12.1 + 编译单元测试          |
-| `RBF_BUILD_BENCHMARKS`   | OFF  | 拉取 Google Benchmark 1.8.3 + 编译基准测试     |
-| `RBF_WARNINGS_AS_ERRORS` | ON   | `/WX` `-Werror`                                |
-| `RBF_ENABLE_FAST_MATH`   | OFF  | ⚠️ 破坏 NaN/Inf 传播语义，仅调试使用           |
+```bash
+cmake -S . -B build-bench -DCMAKE_BUILD_TYPE=Release -DRBF_BUILD_BENCHMARKS=ON
+cmake --build build-bench -j
+./build-bench/bin/benchmarks/bench_solver
+```
 
-**离线构建**：设置 `RBFMAX_DEPS_MIRROR=https://git.studio-internal/mirrors/` 可整体切换依赖源。
+## Performance
 
----
+Reference numbers on MSVC 17.x Release, Intel laptop CPU, Q2 2026.
+Your mileage will vary — see [DEVLOG.md](DEVLOG.md) Slice 09 entry
+for the full measured table.
 
-## 编译矩阵
+| Operation                 | N     | Time        |
+|---------------------------|-------|-------------|
+| `fit` (Gaussian, fixed λ) | 100   | ~0.5 ms     |
+| `fit` (Gaussian, fixed λ) | 1000  | ~50–80 ms   |
+| `fit` (Gaussian, GCV)     | 1000  | ~200–400 ms |
+| `predict` (dense)         | 100   | ~300 ns     |
+| `predict` (dense)         | 1000  | ~3–5 μs     |
+| `predict` (kd-tree KNN)   | 1000  | ~0.5–1 μs   |
 
-| 宿主       | Windows 编译器    | Linux 编译器   | 状态            |
-|------------|-------------------|----------------|-----------------|
-| Maya 2018  | MSVC 14.0 (2015)  | GCC 4.8.2      | 声明支持 ⏳     |
-| Maya 2020  | MSVC 14.1 (2017)  | GCC 6.3.1      | 声明支持 ⏳     |
-| Maya 2022  | MSVC 14.2 (2019)  | GCC 9.3.1      | 声明支持 ⏳     |
-| Maya 2024  | MSVC 14.3 (2022)  | GCC 11.2.1     | 声明支持 ⏳     |
-| Maya 2025  | MSVC 14.3 (2022)  | GCC 11.2.1     | 声明支持 ⏳     |
+The 1000-sample kd-tree predict meets the design target of
+"sub-1μs interactive playback for rigging workflows".
 
-_状态图例：✅ CI 已验证 · ⏳ 声明支持（本地单机验证） · ❌ 不支持_
+## Design Decisions
 
----
+Every design decision in Phase 1 is recorded in
+[DEVLOG.md](DEVLOG.md) along with its rationale and any trade-offs.
+Key decisions:
 
-## 许可证
+- **C++11 baseline** (not C++17) for compatibility with Maya 2018
+  toolchains (GCC 4.8.2 RHEL/CentOS 6).
+- **JSON over Protobuf** for serialization — pragmatic choice for
+  TA-readable rig assets; a binary sidecar can be added in a future
+  v2 schema.
+- **kd-tree only for Gaussian** — non-local kernels (Linear/Cubic/
+  Quintic/TPS/IMQ) traverse all centers to preserve exact results
+  (see math §14 for the truncation-error analysis).
+- **Branch protection** with a CI matrix (MSVC Release + Debug, GCC
+  11 Release) enforced on `main`; linear history via rebase-merge
+  only; auto-delete head branches after PR merge.
 
-_待定。内部协作阶段暂不开源。_
+## Roadmap
 
----
+- **Phase 2**: Maya node integration (`MPxNode` with `kParallel`,
+  Viewport 2.0 `MPxDrawOverride` for debug visualization, Qt6
+  Model/View UI, Swing-Twist driver, pose manager, JSON-backed
+  asset pipeline).
+- **Phase 3**: TBB `parallel_for` for batch predict on large
+  character rigs; GPU compute for offline training.
+- **Phase 4**: Production asset tooling (mirror propagation,
+  batch import/export, regression testing).
 
-## 相关文档
+## License
 
-- [CHANGELOG.md](./CHANGELOG.md) · 对外变更日志
-- [DEVLOG.md](./DEVLOG.md) · 开发切片日志
-- [COMMIT_CONVENTION.md](./COMMIT_CONVENTION.md) · 提交规范
-- [docs/math_derivation.md](./docs/math_derivation.md) · 数学推导
+Copyright 2026 891458249
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE)
+for the full text.
