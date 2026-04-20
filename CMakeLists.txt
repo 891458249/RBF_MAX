@@ -9,7 +9,7 @@
 cmake_minimum_required(VERSION 3.14)
 
 project(rbfmax
-    VERSION     0.6.0
+    VERSION     0.7.0
     DESCRIPTION "Industrial-grade RBF interpolation kernel and Maya plug-in"
     LANGUAGES   CXX
 )
@@ -80,6 +80,7 @@ target_compile_definitions(rbfmax_kernel INTERFACE
 # in their export tables.
 add_library(rbfmax_solver STATIC
     kernel/src/solver.cpp
+    kernel/src/interpolator.cpp
 )
 add_library(rbfmax::solver ALIAS rbfmax_solver)
 
