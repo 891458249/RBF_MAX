@@ -14,6 +14,67 @@ _尚无未发布变更。_
 
 ---
 
+## [0.7.0] — 2026-04-20
+
+**Phase 1 · Slice 07 — RBFInterpolator 门面类（Phase 1 收官集成切片）**
+
+Phase 1 集成切片：将 kernel / distance / kdtree / solver / scratch_pool
+五个底层模块封装进单一 `rbfmax::RBFInterpolator` 类。用户不再需要直接
+管理 `FitResult` 或 `ScratchPool`；构造一个 `RBFInterpolator`、设置
+options、`fit()` 然后 `predict()` 即可。
+
+### 新增 (Added)
+
+- **`rbfmax::RBFInterpolator`** — 单类门面，组合 kernel + distance +
+  kdtree + solver + ScratchPool，提供完整 fit→predict 生命周期：
+  - `fit(centers, targets, lambda)` 与 `fit(centers, targets, kLambdaAuto)`
+    两个重载。
+  - `predict_scalar` / `predict` / `predict_batch` 三个查询接口。
+  - 完整 getter 集：`is_fitted` / `status` / `solver_path` / `n_centers` /
+    `dim` / `lambda_used` / `condition_number` / `uses_kdtree`。
+  - `clone()` 用于跨线程深拷贝（rebuild kd-tree against the COPY's
+    centers buffer，保证两个实例完全独立）。
+- **`rbfmax::InterpolatorOptions`** — 集中配置（kernel、poly_degree、
+  kdtree_threshold、knn_neighbors、force_dense）。
+- **可选 kd-tree KNN 加速**：仅对 Gaussian 核启用（N ≥ 256 默认阈值）。
+  其他核（Linear / Cubic / Quintic / TPS / IMQ）始终全量遍历，依据
+  见 math §14。
+- **数学推导 §14**：KNN 近似 RBF 的截断误差分析，明确 Gaussian 衰减
+  为何足以支持 KNN，以及为何其他核不适用。
+- **15 个新测试**（test_interpolator.cpp，A-G 七类），项目测试总数
+  达 122 个。随机种子 `0xF5BFA6u`。
+
+### 工程 (Build)
+
+- 顶层 CMake 项目版本 `0.6.0 → 0.7.0`。
+- `kernel/src/interpolator.cpp` 加入 `rbfmax_solver` STATIC 库源列表
+  （不新建 target）。`tests/CMakeLists.txt` 注册 `test_interpolator`，
+  并在 `rbfmax_add_test()` helper 内增加条件链接 rbfmax::solver。
+
+### 契约 (Contracts)
+
+- **NOT thread-safe**：单个 `RBFInterpolator` 实例不是线程安全的
+  （内部持有 mutable `ScratchPool` 与 KNN 缓冲）。多线程 predict 必须
+  用 `clone()` 给每个线程一个独立副本。
+- **fit 完全替换**：`fit()` 完全替换之前的训练状态，无历史保留。
+  支持 UI 工作流（样本变化时直接 refit）。
+- **kdtree 启用条件**：`kernel == kGaussian` && `n_centers >= kdtree_threshold`
+  && `!force_dense`。其他情况一律走 dense 全量。
+
+### 不变 (Unchanged)
+
+- Slice 01–06 全部 API 二进制兼容。Interpolator 通过 `#include` 组合
+  调用底层模块，不修改它们。
+
+### Phase 1 进度
+
+- 8/9 切片完成（89%）。
+- 剩余：Slice 08（JSON I/O）、Slice 09（benchmarks，含 ScratchPool 零分配
+  验证）。
+- v1.0.0 在 Slice 09 收官时发布。
+
+---
+
 ## [0.6.0] — 2026-04-20
 
 **Phase 1 · Slice 06 — ScratchPool 零分配 predict（Breathing Slice）**
@@ -292,7 +353,8 @@ Phase 1 最大切片，落地项目首个**非 header-only 模块**与首个 STA
 
 ---
 
-[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/891458249/RBF_MAX/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/891458249/RBF_MAX/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/891458249/RBF_MAX/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/891458249/RBF_MAX/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/891458249/RBF_MAX/compare/v0.3.0...v0.4.0
