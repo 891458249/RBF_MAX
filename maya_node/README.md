@@ -13,14 +13,14 @@ Slice 11.
 
 | Slice | Maya | C++ std | Status |
 |------:|-----:|:-------:|:------:|
-| 10A   | 2022 |  C++14  | this slice (shift-left ABI anchor) |
-| 10B   | 2024 |  C++17  | queued |
-| 10C   | 2025 |  C++17  | queued |
-| 10D   | 2026 |  C++17  | queued |
+| 10A   | 2022 |  C++14  | ✅ validated (shift-left ABI anchor) |
+| 10B   | 2024 |  C++17  | queued (requires Maya 2024 install) |
+| 10C   | 2025 |  C++17  | ✅ validated (zero version-specific delta vs 10A) |
+| 10D   | 2026 |  C++17  | queued (requires Maya 2026 install) |
 
-Only Maya 2022 is verified locally for Slice 10A. 10B / 10C / 10D will
-validate the remaining versions and patch `FindMaya.cmake` if devkit
-layouts differ.
+Both Maya 2022 and Maya 2025 are locally validated end-to-end
+(CMake configure, plugin link, `mayapy` smoke). 10B / 10D extend the
+matrix once those devkits are on the development machine.
 
 ## Build — adapter tests (no Maya devkit required)
 
@@ -40,6 +40,8 @@ yielding **139 tests green**.
 
 ## Build — Maya plugin (requires devkit)
 
+### Build — Maya 2022
+
 ```bash
 cmake -S . -B build-maya-2022 \
       -DCMAKE_BUILD_TYPE=Release \
@@ -49,8 +51,46 @@ cmake -S . -B build-maya-2022 \
 cmake --build build-maya-2022 -j --config Release
 ```
 
-The output is `build-maya-2022/bin/rbfmax_maya.mll` (Windows),
+The output is `build-maya-2022/bin/Release/rbfmax_maya.mll` (Windows),
 `rbfmax_maya.so` (Linux), or `rbfmax_maya.bundle` (macOS).
+
+### Build — Maya 2025
+
+**Prerequisites**
+- Maya 2025 devkit at `C:/SDK/Maya2025/devkitBase` (or any path you
+  pass via `-DMAYA_DEVKIT_ROOT=...`). The Maya 2025 devkit ships as
+  a separate archive from Autodesk; unpack it and move `devkitBase/`
+  into a stable location outside the browser's Downloads folder.
+- Maya 2025 runtime with `mayapy.exe` (for the smoke test step below).
+  On Windows this is typically `C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe`
+  (Python 3.11).
+
+```bash
+cmake -S . -B build-maya-2025 \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DRBF_BUILD_MAYA_NODE=ON \
+      -DMAYA_VERSION=2025 \
+      -DMAYA_DEVKIT_ROOT="C:/SDK/Maya2025/devkitBase"
+cmake --build build-maya-2025 -j --config Release
+```
+
+Setting `MAYA_VERSION=2025` activates the C++17 arm of
+`cmake/MayaVersionMatrix.cmake` (Maya 2022 builds at C++14; 2024,
+2025, 2026 at C++17). `adapter_core.hpp` stays C++14-compatible so
+both arms compile cleanly from the same source tree.
+
+Output: `build-maya-2025/bin/Release/rbfmax_maya.mll`.
+
+Smoke test:
+
+```bash
+"C:/Program Files/Autodesk/Maya2025/bin/mayapy.exe" \
+    maya_node/tests/smoke/smoke_hellonode.py \
+    build-maya-2025/bin/Release/rbfmax_maya.mll
+```
+
+Expected: `exit 0`, `compute(1.0)` bit-identical to `exp(-1)`
+(`err = 0.000e+00`).
 
 ### `MAYA_DEVKIT_ROOT` resolution order
 
