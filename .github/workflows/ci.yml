@@ -14,8 +14,10 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']           # Slice 09: trigger benchmark-smoke on version tags.
   pull_request:
     branches: [main]
+  workflow_dispatch:       # Slice 09: allow on-demand benchmark runs.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -107,4 +109,51 @@ jobs:
         with:
           name: ctest-log-ubuntu-release
           path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  #  Slice 09 — opt-in benchmark smoke run.
+  #
+  #  Only triggered on:
+  #    * Manual workflow_dispatch (on-demand perf spot-check)
+  #    * Pushing a version tag (v*)
+  #  Never on regular PRs, to keep daily CI fast.
+  # ---------------------------------------------------------------------------
+  benchmark-smoke:
+    name: Benchmark smoke (Ubuntu / GCC 11)
+    runs-on: ubuntu-22.04
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache FetchContent deps (bench)
+        uses: actions/cache@v4
+        with:
+          path: build-bench/_deps
+          key: ${{ runner.os }}-bench-deps-${{ hashFiles('cmake/FetchDependencies.cmake', 'benchmarks/CMakeLists.txt') }}
+
+      - name: Configure (Release + Benchmarks)
+        run: >
+          cmake -S . -B build-bench
+          -DCMAKE_BUILD_TYPE=Release
+          -DRBF_BUILD_BENCHMARKS=ON
+
+      - name: Build benchmarks
+        run: cmake --build build-bench -j$(nproc) --target bench_kernel bench_solver bench_predict
+
+      - name: Smoke run each benchmark (min time 0.01s)
+        run: |
+          for bin in build-bench/bin/benchmarks/bench_*; do
+            echo "=== Running $bin ==="
+            "$bin" --benchmark_min_time=0.01s --benchmark_repetitions=1
+          done
+
+      - name: Upload benchmark directory on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-log
+          path: build-bench/
           if-no-files-found: ignore
