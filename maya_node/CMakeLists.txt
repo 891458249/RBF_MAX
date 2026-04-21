@@ -19,7 +19,7 @@ if(RBF_BUILD_MAYA_NODE)
     # into the plugin at compile time for MFnPlugin registration and
     # future diagnostic use.
     # ------------------------------------------------------------------
-    set(RBFMAX_MAYA_PLUGIN_VERSION "1.0.0-phase2a-slice11")
+    set(RBFMAX_MAYA_PLUGIN_VERSION "1.1.0")
     set(RBFMAX_MAYA_PLUGIN_VENDOR  "891458249 / RBF_MAX")
     # R-09 self-check: 0x00013A00 = 80384 (< 0x7FFFF development-range cap).
     set(RBFMAX_MAYA_NODE_TYPEID    "0x00013A00")
