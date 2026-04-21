@@ -248,7 +248,7 @@ TEST(RBFInterpolatorKdTree, NonGaussianAlwaysDense) {
 }
 
 // =============================================================================
-//  D — State queries (3)
+//  D — State queries (4)
 // =============================================================================
 
 TEST(RBFInterpolatorState, AllGettersAfterFit) {
@@ -303,6 +303,31 @@ TEST(RBFInterpolatorState, KernelParamsReflectsFit) {
     const KernelParams& kp = rbf.kernel_params();
     EXPECT_EQ(kp.type, KernelType::kGaussian);
     EXPECT_DOUBLE_EQ(kp.eps, 1.0);
+}
+
+// Slice 13 addition: centers() getter must return the exact matrix
+// fit() stored in FitResult.  For Slice 13 the DrawOverride depends on
+// this to render the center positions in Viewport 2.0 without having
+// to re-parse the JSON or reach into interpolator internals.
+TEST(RBFInterpolatorState, CentersGetterReflectsFit) {
+    InterpolatorOptions opts(KernelParams{KernelType::kGaussian, 1.0});
+    RBFInterpolator rbf(opts);
+
+    MatrixX C(4, 2);
+    C << 0, 0,  1, 0,  0, 1,  1, 1;
+    MatrixX T(4, 1);
+    T << 0, 1, 1, 2;
+    ASSERT_EQ(rbf.fit(C, T, 1e-6), FitStatus::OK);
+
+    const MatrixX& got = rbf.centers();
+    ASSERT_EQ(got.rows(), 4);
+    ASSERT_EQ(got.cols(), 2);
+    for (Eigen::Index i = 0; i < 4; ++i) {
+        for (Eigen::Index j = 0; j < 2; ++j) {
+            EXPECT_DOUBLE_EQ(got(i, j), C(i, j))
+                << "row " << i << " col " << j;
+        }
+    }
 }
 
 // =============================================================================

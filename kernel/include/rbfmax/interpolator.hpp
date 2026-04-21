@@ -116,6 +116,17 @@ public:
     /// node) report kernel type without re-parsing the saved JSON.
     const KernelParams& kernel_params()   const noexcept;
 
+    /// The centers matrix (N × D) currently in effect.  After fit() or
+    /// load() this reflects the centers stored in the FitResult (the
+    /// owned copy Phase 1's solver/io_json populate).  Before the first
+    /// successful fit/load, returns a default-constructed 0×0 matrix.
+    /// Gate on is_fitted() for defined semantics.
+    ///
+    /// Added in Phase 2B Slice 13 to let the Viewport 2.0 DrawOverride
+    /// render centers without re-parsing the saved JSON or re-creating
+    /// the interpolator internals.
+    const MatrixX&      centers()         const noexcept;
+
     // ---- Persistence (Slice 08) -----------------------------------------
     // Convenience methods that delegate to rbfmax::io_json::save / load.
     // Returns true on success; false on any failure (file I/O, schema

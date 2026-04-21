@@ -370,6 +370,13 @@ const KernelParams& RBFInterpolator::kernel_params() const noexcept {
     return fit_result_.kernel;
 }
 
+const MatrixX& RBFInterpolator::centers() const noexcept {
+    // Same contract shape as kernel_params(): the FitResult always has a
+    // valid (possibly 0x0) centers matrix, so this getter is noexcept.
+    // Callers gate on is_fitted() when they care about row/col counts.
+    return fit_result_.centers;
+}
+
 // -----------------------------------------------------------------------------
 //  Persistence (Slice 08) — delegate to rbfmax::io_json
 // -----------------------------------------------------------------------------
