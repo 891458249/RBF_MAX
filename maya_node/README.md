@@ -223,6 +223,121 @@ Slice 11 ships no in-Maya training command — that is slated for Slice
    be edited manually; useful for experimentation but not a production
    workflow.
 
+## Command: `rbfmaxTrainAndSave` (Slice 12)
+
+MPxCommand that closes the "train from inside Maya" gap. Reads
+training data from Python lists (inline mode) or CSV files, fits
+a Phase 1 `RBFInterpolator`, and writes the schema-v1 JSON that
+`mRBFNode` can load.
+
+### Flags
+
+| Long | Short | Type | Mode | Notes |
+|------|-------|------|------|-------|
+| `centers` | `c` | doubleArray | inline | Row-major flat list |
+| `targets` | `t` | doubleArray | inline | Row-major flat list |
+| `inputDim` | `idm` | int | inline | D = centers column count |
+| `outputDim` | `od` | int | inline | M = targets column count |
+| `centersFile` | `cf` | string | csv | Path to centers.csv (N × D) |
+| `targetsFile` | `tf` | string | csv | Path to targets.csv (N × M) |
+| `jsonPath` | `jp` | string | **required** | Output JSON path |
+| `kernel` | `kn` | string | shared | `Gaussian` (default), `Cubic`, `Linear`, `Quintic`, `ThinPlateSpline`, `InverseMultiquadric` |
+| `epsilon` | `ep` | double | shared | Shape parameter (default 1.0). Only used by Gaussian / IMQ |
+| `polyDegree` | `pd` | int | shared | -1 = auto via `minimum_polynomial_degree`, 0..3 = explicit |
+| `lambda` | `lm` | string | shared | `"auto"` (GCV, default) or numeric like `"1e-6"` |
+| `force` | `fo` | bool | shared | Overwrite existing `jsonPath` (default false) |
+
+> **Maya MSyntax quirk** — long flag names must be **≥ 4 characters** or
+> `addFlag` silently drops them. This is why the lambda parameter is
+> `-epsilon` (not `-eps`) and the input-dimension is `-inputDim`
+> (not `-dim`). Caught as R-30 during Slice 12 smoke debugging.
+
+### Example — inline mode
+
+```python
+import maya.cmds as cmds
+cmds.loadPlugin("rbfmax_maya.mll")
+
+out = cmds.rbfmaxTrainAndSave(
+    centers=[0.0, 0.0,  1.0, 0.0,  0.0, 1.0,  1.0, 1.0],
+    targets=[0.0, 1.0, 1.0, 2.0],
+    inputDim=2, outputDim=1,
+    jsonPath="C:/rigs/my_rbf.json",
+    kernel="Gaussian", epsilon=1.0, polyDegree=-1,
+    force=True,
+    **{"lambda": "1e-6"})
+print(out)   # "C:/rigs/my_rbf.json" on success
+```
+
+### Example — CSV mode
+
+Contents of `centers.csv` (4 samples, D=2):
+
+```
+# optional '#' line comments and blank lines are tolerated
+0.0,0.0
+1.0,0.0
+0.0,1.0
+1.0,1.0
+```
+
+Contents of `targets.csv` (4 samples, M=1):
+
+```
+0.0
+1.0
+1.0
+2.0
+```
+
+```python
+cmds.rbfmaxTrainAndSave(
+    centersFile="C:/data/centers.csv",
+    targetsFile="C:/data/targets.csv",
+    jsonPath="C:/rigs/my_rbf.json",
+    kernel="Gaussian", epsilon=1.0,
+    force=True,
+    **{"lambda": "auto"})
+```
+
+### Typical workflow
+
+```python
+# 1. Train
+cmds.rbfmaxTrainAndSave(centersFile=..., targetsFile=...,
+                        jsonPath="rig.json", force=True)
+
+# 2. Create node and point it at the freshly-trained file
+node = cmds.createNode("mRBFNode")
+cmds.setAttr(f"{node}.jsonPath", "rig.json", type="string")
+
+# 3. Query at runtime
+cmds.setAttr(f"{node}.queryPoint", [0.5, 0.5], type="doubleArray")
+print(cmds.getAttr(f"{node}.outputValues"))
+```
+
+### Error behaviour
+
+Failures raise `RuntimeError` from Python (`MS::kFailure` from
+the underlying `MPxCommand`). Typical messages:
+
+| Trigger | Message pattern |
+|---------|-----------------|
+| `-jsonPath` missing | `missing required flag -jsonPath / -jp` |
+| Inline + CSV flags mixed | `modes are mutually exclusive` |
+| Neither mode's flags supplied | `must supply either -centers and -targets ...` |
+| Inline without `-inputDim` / `-outputDim` | `inline mode requires both -dim and -outputDim` |
+| CSV parse failure | `centers csv parse failed: <detail>` |
+| Unknown kernel string | `unknown kernel: "<x>"` |
+| `jsonPath` exists and `-force` false | `file exists; pass -force true to overwrite: ...` |
+| `lambda` unparseable | `cannot parse -lambda: "<x>"` |
+| `solver::fit` failed | `fit failed: <FitStatus>` |
+| `RBFInterpolator::save` failed | `save failed (could not write schema-v1 JSON to): ...` |
+
+The command is **not undoable** — it writes a file rather than
+modifying scene state. The `-force` flag is the only guard against
+accidental overwrite.
+
 ## Known limitations (Slice 10A)
 
 - **Development-range typeId**: `0x00013A00`. This ID is valid for
@@ -236,20 +351,32 @@ Slice 11 ships no in-Maya training command — that is slated for Slice
   SYSTEM-included. Slice 10B+ will reintroduce strict warnings behind
   `/external:W0` (MSVC ≥ 16.10) or `-isystem` on Clang/GCC. Adapter
   tests do honour the strict warning set.
-- **No dynamic array attributes yet** — Slice 11 adds per-sample centers
-  and targets as Maya array attributes.
-- **No Maya 2024/2025/2026 validation** — see the version table above.
+- **Dynamic array attributes** added in Slice 11 (`queryPoint`,
+  `outputValues` as `MFnDoubleArrayData`) — variable-dim queries
+  are supported.
+- **Maya 2024 / 2026 validation** still pending — devkits not yet
+  on the development machine. Slice 10C (Maya 2025) and the double-
+  environment smoke infrastructure are already in place.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `CMakeLists.txt` | Plugin target + adapter test gate |
-| `include/rbfmax/maya/adapter_core.hpp` | Pure-C++, C++14-compliant, calls Phase 1 `evaluate_kernel` |
-| `include/rbfmax/maya/mrbf_node.hpp` | `MPxNode` skeleton class declaration |
+| `include/rbfmax/maya/adapter_core.hpp` | Pure-C++, C++14-compliant helpers (Gaussian eval, attribute marshalling, CSV/lambda parsing) |
+| `include/rbfmax/maya/mrbf_node.hpp` | `MPxNode` declaration — JSON-path load + predict |
+| `include/rbfmax/maya/rbfmax_train_cmd.hpp` | `MPxCommand` declaration for `rbfmaxTrainAndSave` |
 | `include/rbfmax/maya/plugin_info.hpp.in` | CMake-configured constants (version, typeId) |
-| `src/mrbf_node.cpp` | `compute()` + attribute wiring |
-| `src/plugin_main.cpp` | `initializePlugin` / `uninitializePlugin` |
-| `tests/CMakeLists.txt` | Adapter test target |
-| `tests/test_adapter_core.cpp` | 3 TEST blocks (H1/H2/H3) |
-| `tests/smoke/smoke_hellonode.py` | `mayapy` 4-step contract |
+| `src/mrbf_node.cpp` | `compute()` + `try_load()` + attribute wiring |
+| `src/plugin_main.cpp` | `initializePlugin` / `uninitializePlugin` — registers node + command |
+| `src/rbfmax_train_cmd.cpp` | `rbfmaxTrainAndSave` `doIt()` implementation |
+| `src/adapter_core_csv.cpp` | Non-inline CSV / lambda parser implementations |
+| `tests/CMakeLists.txt` | Adapter test target (also links `adapter_core_csv.cpp`) |
+| `tests/test_adapter_core.cpp` | 17 GTest blocks: H1-H3 (Slice 10A) + C1-C6 (Slice 11) + D1-D8 (Slice 12) |
+| `tests/smoke/smoke_hellonode.py` | Slice 10A `mayapy` 4-step contract |
+| `tests/smoke/smoke_predict.py` | Slice 11 `mayapy` 5-step contract (load + predict bit-identity) |
+| `tests/smoke/smoke_train.py` | Slice 12 `mayapy` 4-scenario contract (csv / inline / force / bad-kernel) |
+| `tests/smoke/fixtures/tiny_rbf.json` | Slice 11 Phase 1-generated schema-v1 fixture |
+| `tests/smoke/fixtures/tiny_rbf_expected.json` | Slice 11 reference predict outputs |
+| `tests/smoke/fixtures/tiny_train_centers.csv` | Slice 12 CSV fixture matching tiny_rbf's centers |
+| `tests/smoke/fixtures/tiny_train_targets.csv` | Slice 12 CSV fixture matching tiny_rbf's targets |
