@@ -32,6 +32,8 @@ if(RBF_BUILD_MAYA_NODE)
     add_library(rbfmax_maya_node MODULE
         src/mrbf_node.cpp
         src/plugin_main.cpp
+        src/adapter_core_csv.cpp     # Slice 12 — non-inline CSV / lambda parsers
+        src/rbfmax_train_cmd.cpp     # Slice 12 — rbfmaxTrainAndSave MPxCommand
     )
 
     target_include_directories(rbfmax_maya_node PRIVATE

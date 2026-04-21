@@ -42,18 +42,24 @@
 
 namespace {
 
+using rbfmax::MatrixX;
 using rbfmax::Scalar;
 using rbfmax::VectorX;
 using rbfmax::maya::double_vector_to_eigen;
 using rbfmax::maya::eigen_to_double_vector;
+using rbfmax::maya::file_exists;
 using rbfmax::maya::hello_transform;
+using rbfmax::maya::parse_csv_matrix;
+using rbfmax::maya::parse_lambda_arg;
+using rbfmax::maya::unflatten_double_array;
 using rbfmax::maya::validate_json_path;
 
 // Seed reserved (since Slice 10A) for randomised adapter tests.  Slice 11's
-// C1-C6 are deterministic and do not use it; the anchor TEST in H3 keeps
-// the symbol alive under -Wunused-variable.
-constexpr std::uint32_t kSeed     = 0xF5BFA9u;  // Slice 10A seed
-constexpr std::uint32_t kSeedS11  = 0xF5BFAAu;  // Slice 11 seed reserved
+// C1-C6 and Slice 12's D1-D8 are deterministic and do not use them; the
+// anchor TEST in H3 keeps the symbols alive under -Wunused-variable.
+constexpr std::uint32_t kSeed      = 0xF5BFA9u;  // Slice 10A seed
+constexpr std::uint32_t kSeedS11   = 0xF5BFAAu;  // Slice 11 seed reserved
+constexpr std::uint32_t kSeedS12   = 0xF5BFABu;  // Slice 12 seed reserved
 
 // ---------------------------------------------------------------------
 // Cross-platform temp-file helper, mirroring the Slice 08 pattern in
@@ -118,10 +124,11 @@ TEST(HelloTransform, H3_EvenFunctionUnderSignFlip) {
         EXPECT_EQ(hello_transform(x), hello_transform(-x))
             << "x = " << x;
     }
-    // Anchor kSeed / kSeedS11 so -Wunused-variable does not fire
-    // under /WX until Slice 11+ tests actually consume them.
+    // Anchor kSeed / kSeedS11 / kSeedS12 so -Wunused-variable does not
+    // fire under /WX until Slice 11+ tests actually consume them.
     EXPECT_NE(kSeed,    0u);
     EXPECT_NE(kSeedS11, 0u);
+    EXPECT_NE(kSeedS12, 0u);
 }
 
 // =============================================================================
@@ -205,4 +212,128 @@ TEST(AdapterMarshalling, C6_DoubleToEigenPreservesPrecision) {
     for (std::size_t i = 0; i < src.size(); ++i) {
         EXPECT_EQ(back[i], src[i]) << "i=" << i;  // exact ==, not NEAR
     }
+}
+
+// =============================================================================
+//  Slice 12 — D group (8): training-command helpers
+// =============================================================================
+//
+// These tests cover the four pure-C++ utilities that back the
+// rbfmaxTrainAndSave MPxCommand:
+//   * unflatten_double_array    (inline mode: flat list -> N x D matrix)
+//   * parse_csv_matrix          (csv mode: file -> matrix)
+//   * parse_lambda_arg          ("auto" or numeric)
+//   * file_exists               (same contract as validate_json_path)
+//
+// All deterministic; kSeedS12 reserved for future randomised additions.
+
+// D1 — Simple unflatten: {1,2,3,4,5,6} with D=2 -> 3x2 matrix.
+TEST(AdapterTrainInline, D1_UnflattenSimple) {
+    const std::vector<double> flat = {1, 2, 3, 4, 5, 6};
+    MatrixX m;
+    ASSERT_TRUE(unflatten_double_array(flat, 2, m));
+    ASSERT_EQ(m.rows(), 3);
+    ASSERT_EQ(m.cols(), 2);
+    EXPECT_EQ(m(0, 0), 1.0);  EXPECT_EQ(m(0, 1), 2.0);
+    EXPECT_EQ(m(1, 0), 3.0);  EXPECT_EQ(m(1, 1), 4.0);
+    EXPECT_EQ(m(2, 0), 5.0);  EXPECT_EQ(m(2, 1), 6.0);
+}
+
+// D2 — size not a multiple of D: must fail and leave out untouched.
+TEST(AdapterTrainInline, D2_UnflattenBadLength) {
+    const std::vector<double> flat = {1, 2, 3};
+    MatrixX sentinel(5, 7);  // pre-existing shape
+    MatrixX m = sentinel;
+    EXPECT_FALSE(unflatten_double_array(flat, 2, m));
+    // On failure, out is untouched (preserves atomic-update contract).
+    EXPECT_EQ(m.rows(), 5);
+    EXPECT_EQ(m.cols(), 7);
+}
+
+// D3 — non-positive D: must fail.
+TEST(AdapterTrainInline, D3_UnflattenBadDim) {
+    const std::vector<double> flat = {1, 2, 3, 4};
+    MatrixX m;
+    EXPECT_FALSE(unflatten_double_array(flat, 0, m));
+    EXPECT_FALSE(unflatten_double_array(flat, -1, m));
+}
+
+// D4 — simple CSV: "1.0,2.0\n3.0,4.0\n" -> 2x2 matrix.
+TEST(AdapterTrainCsv, D4_ParseCsvSimple) {
+    TempFile tf("d4");
+    tf.write("1.0,2.0\n3.0,4.0\n");
+    MatrixX m;
+    std::string err;
+    ASSERT_TRUE(parse_csv_matrix(tf.path(), m, err)) << "err=" << err;
+    ASSERT_EQ(m.rows(), 2);
+    ASSERT_EQ(m.cols(), 2);
+    EXPECT_EQ(m(0, 0), 1.0);  EXPECT_EQ(m(0, 1), 2.0);
+    EXPECT_EQ(m(1, 0), 3.0);  EXPECT_EQ(m(1, 1), 4.0);
+    EXPECT_TRUE(err.empty());
+}
+
+// D5 — comments + blank lines are skipped; data rows are collected.
+TEST(AdapterTrainCsv, D5_ParseCsvWithCommentsAndBlankLines) {
+    TempFile tf("d5");
+    tf.write("# header comment\n"
+             "1,2\n"
+             "\n"
+             "# another comment\n"
+             "3,4\n"
+             "\n");
+    MatrixX m;
+    std::string err;
+    ASSERT_TRUE(parse_csv_matrix(tf.path(), m, err)) << "err=" << err;
+    ASSERT_EQ(m.rows(), 2);
+    ASSERT_EQ(m.cols(), 2);
+    EXPECT_EQ(m(0, 0), 1.0);  EXPECT_EQ(m(0, 1), 2.0);
+    EXPECT_EQ(m(1, 0), 3.0);  EXPECT_EQ(m(1, 1), 4.0);
+}
+
+// D6 — column-count mismatch across rows: fail, err_reason says so.
+TEST(AdapterTrainCsv, D6_ParseCsvColMismatch) {
+    TempFile tf("d6");
+    tf.write("1,2\n3,4,5\n");
+    MatrixX m;
+    std::string err;
+    EXPECT_FALSE(parse_csv_matrix(tf.path(), m, err));
+    EXPECT_NE(err.find("mismatch"), std::string::npos)
+        << "err should contain 'mismatch', got: " << err;
+}
+
+// D7 — "auto" / "AUTO" / "Auto" all resolve to is_auto=true.
+TEST(AdapterTrainLambda, D7_ParseLambdaAuto) {
+    const std::string variants[] = {"auto", "AUTO", "Auto"};
+    for (const auto& v : variants) {
+        bool is_auto = false;
+        Scalar lambda_value = -1.0;
+        ASSERT_TRUE(parse_lambda_arg(v, is_auto, lambda_value))
+            << "variant: " << v;
+        EXPECT_TRUE(is_auto) << "variant: " << v;
+    }
+}
+
+// D8 — numeric strings parse end-to-end and set is_auto=false.
+TEST(AdapterTrainLambda, D8_ParseLambdaNumeric) {
+    bool is_auto = true;
+    Scalar lambda_value = 0;
+    ASSERT_TRUE(parse_lambda_arg("1e-6", is_auto, lambda_value));
+    EXPECT_FALSE(is_auto);
+    EXPECT_DOUBLE_EQ(lambda_value, 1e-6);
+
+    ASSERT_TRUE(parse_lambda_arg("0.001", is_auto, lambda_value));
+    EXPECT_FALSE(is_auto);
+    EXPECT_DOUBLE_EQ(lambda_value, 0.001);
+
+    // Trailing garbage should cause rejection.
+    EXPECT_FALSE(parse_lambda_arg("1e-6xyz", is_auto, lambda_value));
+    EXPECT_FALSE(parse_lambda_arg("not_a_number", is_auto, lambda_value));
+
+    // file_exists sanity-check alongside (single D-group test keeps the
+    // matrix small; the helper is trivially delegated to
+    // validate_json_path).
+    EXPECT_FALSE(file_exists(""));
+    TempFile tf("d8_exists");
+    tf.write("x");
+    EXPECT_TRUE(file_exists(tf.path()));
 }
