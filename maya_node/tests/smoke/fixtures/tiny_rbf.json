@@ -1,0 +1,72 @@
+{
+  "config": {
+    "force_dense": false,
+    "kdtree_threshold": 256,
+    "kernel": {
+      "eps": 1.0,
+      "type": "Gaussian"
+    },
+    "knn_neighbors": 0,
+    "poly_degree": -1
+  },
+  "data": {
+    "centers": {
+      "cols": 2,
+      "rows": 4,
+      "values": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          1.0,
+          1.0
+        ]
+      ]
+    },
+    "poly_coeffs": {
+      "cols": 1,
+      "rows": 0,
+      "values": []
+    },
+    "weights": {
+      "cols": 1,
+      "rows": 4,
+      "values": [
+        [
+          -0.6220699454626955
+        ],
+        [
+          0.534446359755459
+        ],
+        [
+          0.5344463597554592
+        ],
+        [
+          1.6909626649736131
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "created_at": "2026-04-21T07:26:51Z",
+    "library": "rbfmax",
+    "version": "1.0.0"
+  },
+  "schema": "rbfmax/v1",
+  "training": {
+    "condition_number": -1.0,
+    "lambda_used": 1e-06,
+    "residual_norm": 7.976623736845382e-07,
+    "solver_path": "LLT",
+    "status": "OK"
+  }
+}
