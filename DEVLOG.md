@@ -14,6 +14,130 @@
 
 ---
 
+## 2026-04-21 · Slice 12 — rbfmaxTrainAndSave command + v1.1.0 (Phase 2A close-out)
+
+**Scope**: Phase 2A closing slice. Adds the `rbfmaxTrainAndSave` MPxCommand so users can train from inside Maya, closing the Slice 11 JSON-path architecture's "must train externally" gap. Bumps project SemVer to **1.1.0**; tag is pushed by the human channel after PR merge.
+
+**Deliverables**
+- `maya_node/include/rbfmax/maya/adapter_core.hpp` — 4 new pure-C++ utilities: `unflatten_double_array`, `file_exists`, `parse_csv_matrix` (non-inline), `parse_lambda_arg` (non-inline). All C++14-compliant so both plugin (C++14, Maya 2022 ABI) and adapter tests (C++17) build against the same header.
+- `maya_node/src/adapter_core_csv.cpp` — Non-inline implementations of the two parser utilities. Linked into both the plugin target and the adapter test target, Maya-free so it runs on any CI node.
+- `maya_node/include/rbfmax/maya/rbfmax_train_cmd.hpp` + `src/rbfmax_train_cmd.cpp` — The command itself. 12 flags across two mutually exclusive modes (inline / CSV). 348 LOC of implementation covering argument parsing, mode detection, data loading, kernel validation, `--force` gating, Phase 1 `fit` + `save`, and detailed error surface.
+- `maya_node/src/plugin_main.cpp` — `registerCommand` / `deregisterCommand` wiring + atomic rollback if command registration fails after node registration succeeds.
+- `maya_node/CMakeLists.txt` — adds `adapter_core_csv.cpp` and `rbfmax_train_cmd.cpp` to the plugin sources, bumps `RBFMAX_MAYA_PLUGIN_VERSION` to `"1.1.0"`.
+- `maya_node/tests/CMakeLists.txt` — links `adapter_core_csv.cpp` into the adapter test target so the D-group tests can reach the non-inline parsers.
+- `maya_node/tests/test_adapter_core.cpp` — 8 new D-group TEST blocks (D1–D8) covering `unflatten_double_array`, `parse_csv_matrix`, `parse_lambda_arg`, `file_exists`. Random seed `kSeedS12 = 0xF5BFABu` reserved for future randomised additions.
+- `maya_node/tests/smoke/smoke_train.py` — 4-scenario mayapy contract: S1 CSV mode end-to-end, S2 inline mode end-to-end, S3 `-force=False` on existing file raises, S4 bogus kernel string raises. Both success scenarios load the trained JSON via `mRBFNode` and assert predict bit-identity with Slice 11's `tiny_rbf_expected.json`.
+- `maya_node/tests/smoke/fixtures/tiny_train_centers.csv`, `tiny_train_targets.csv` — CSV fixtures mirroring the Slice 11 `tiny_rbf.json` sample set so the train-then-predict bit-identity assertion is meaningful.
+- `CMakeLists.txt` (top-level) — project VERSION bumped `1.0.0 → 1.1.0`.
+- `README.md`, `CHANGELOG.md`, `maya_node/README.md` — user-facing Phase 2A complete announcement, `[1.1.0]` changelog entry, command usage docs.
+
+**Design decisions (10 locked pre-slice)**
+1. **Command-based training, not node-based** — keeps the Slice 11 "jsonPath is the interface" contract intact; training is a one-shot side effect, not a DG operation.
+2. **Two mutually exclusive input modes** — inline (for Python REPL / interactive experimentation) and CSV (for pipeline / large N). Mixing the two flag sets is an explicit error.
+3. **12 flags with long names ≥ 4 chars** — `inputDim` / `outputDim` / `epsilon` / `polyDegree` / `lambda` / `force` / `kernel` / `jsonPath` / `centers` / `targets` / `centersFile` / `targetsFile`. See F5 below for the ≥4-char rule.
+4. **Required flag**: only `-jsonPath`. Every other flag has a default appropriate for Gaussian rig data.
+5. **Not undoable** — the command writes a file; undo would need to remember the prior file contents. Out of scope for Slice 12; advised in README.
+6. **`-force` gates on file existence**, not on DG state — we don't try to be clever about "is anything downstream reading this file right now?" (that would require tracking `mRBFNode`s pointing at the path, which crosses into Slice 13 territory).
+7. **Error surface returns `MS::kFailure` + `displayError`** — Python binding raises `RuntimeError` consistently; smoke tests catch on that.
+8. **Multi-use doubleArray** — `makeFlagMultiUse` + `numberOfFlagUses` + `getFlagArgumentList` is the canonical idiom. Each Python list element → one flag use → one double.
+9. **CSV format** = comma-delimited, `#` line comments OK, blank lines OK, uniform column count enforced per file.
+10. **Bit-identity smoke assertion** — train + save via command, then load + predict via node, must produce the same outputs as Slice 11's reference table (same Phase 1 code path on both sides, so 1e-10 tolerance is defence-in-depth; observed err=0).
+
+**F5 — MSyntax::addFlag silently rejects long names shorter than 4 characters**
+
+First drafts used `-dim` and `-eps` per spec. Both registered without error (addFlag returned `kFailure "Unexpected Internal Failure"` but I initially treated that as a transient warning). The Python cmds binding then raised `TypeError: Invalid flag 'eps'` at call time. Diagnostic wrapper around `addFlag` logging failed invocations surfaced the truth: **addFlag returns `kFailure` for any long name under 4 chars**. Probable Maya parser heuristic: 1–3-char long names collide with short-name prefix-match disambiguation logic.
+
+Workarounds tried and rejected:
+- 2–3 char short names (`-di`, `-ep`, `-id`, `-ev`, `-ni`, `-sp`, `-ki`, `-ks`) — all failed because the **long name** was the issue, not the short one.
+- First-letter avoidance (`-e` is edit, `-d` is debug) — wasn't the actual cause; Autodesk samples use `-d` / `-e` happily.
+
+Settled workaround: rename `-dim` → `-inputDim` and `-eps` → `-epsilon` (semantic names, unambiguous, ≥4 chars). Python keyword args use the same spelling.
+
+Documented as **R-30** in the tech-debt register below. Phase 2 reviewer protocol gets one more entry: **short or long flag names must be grep-verified against Autodesk samples before dispatch**; this was not in the pre-flight check this slice.
+
+**Tolerance register**
+- Adapter D1–D8: `EXPECT_EQ` / `EXPECT_DOUBLE_EQ` throughout. No approximation; these tests are mechanical round-trips.
+- Smoke S1 / S2 bit-identity against `tiny_rbf_expected.json`: `1e-10` absolute (inherited from Slice 11). Observed err=0 exactly on both Maya 2022 and 2025 — expected, since the command writes through the same `RBFInterpolator::save` path that the generator used.
+- Smoke S3 / S4 error-path assertions: substring match on the Python `RuntimeError` message. No numeric tolerance.
+
+**Tech-debt register additions**
+- **R-30** (new) — MSyntax long flag name ≥ 4-char requirement. Documented in the command source, `maya_node/README.md`, and CHANGELOG known-limitations. No action needed; naming rule is now stable.
+- **T-11** (was open) — **closed**. Users can now train from inside Maya via `rbfmaxTrainAndSave`.
+- **T-13** (new) — v1.1.0 manual GitHub Release creation (pattern from Slice 09 close-out). Human-channel step after PR merges and tag pushes.
+
+**Validation outcomes** (Windows 11, MSVC 19.44.35223)
+
+| Step | Command | Result |
+|------|---------|--------|
+| 1 | `build-adapter` Release with `RBF_BUILD_MAYA_ADAPTER_TESTS=ON` | **154/154 green**, 12.91 s (137 Phase 1 + 3 H + 6 C + **8 D**) |
+| 2a | Maya 2022 `.mll` | 0 warn 0 err, **501 760 bytes** (grew from 158 208 in Slice 11 due to command + CSV parser TUs) |
+| 2b | Maya 2025 `.mll` | 0 warn 0 err, **501 760 bytes** (byte-identical to 2022) |
+| 3a | Maya 2022: hellonode + predict + train smokes | all **exit 0**; bit-identity on both success scenarios; RuntimeError on both error scenarios |
+| 3b | Maya 2025: same 3 smokes | all **exit 0**, bit-identical to 2022 |
+| 4 | Phase 1 Release regression | **137/137 green**, 11.93 s |
+
+**Workflow note**
+- Branch `slice-12-train-command` → 5 commits (feat adapter / feat command / build cmake / docs readme / docs devlog) → PR → CI 3 Phase 1 jobs (Maya opts default OFF) → human approve → rebase merge → auto-delete.
+- After merge (human channel): `git tag v1.1.0 <merge-sha>`, `git push origin v1.1.0`, `gh release create v1.1.0 --title "v1.1.0 — Phase 2A complete"`.
+
+---
+
+## Phase 2A Retrospective
+
+**Timeline**: 2026-04-21 (from v1.0.0 baseline, after Slice 09 Phase 1 close-out) → 2026-04-21 (v1.1.0). Calendar-compressed single-day Phase.
+
+**Slices shipped**: **4** (10A, 10C, 11, 12). **10B** (Maya 2024) and **10D** (Maya 2026) deferred — blocked on local devkit availability, non-blocking per Slice 10C evidence that the architecture is version-agnostic.
+
+**Git releases**: v1.0.0 → **v1.1.0**.
+
+**Code inventory (approx, at v1.1.0)**:
+- `maya_node/` headers + sources: ~1 900 LOC across 9 files (header + 3 sources + 1 .in template + Slice 12 additions)
+- `maya_node/tests/`: ~760 LOC (17 GTest blocks + 3 smoke scripts)
+- `maya_node/tests/smoke/fixtures/`: 4 fixtures (2 JSON + 2 CSV)
+- `cmake/`: +2 Maya-specific modules (FindMaya.cmake, MayaVersionMatrix.cmake)
+- Phase 1 amendment: +10 LOC (kernel_params() getter) + 24 LOC test
+- Plugin binary size evolution: 25 KB (10A HelloNode) → 158 KB (11 real predict + kernel_params + solver link) → **502 KB** (12 + CSV parser + MPxCommand)
+
+**What went well**
+- **Grep-verify protocol pays compounding interest**. Phase 2 reviewer discipline caught all of G1–G4 (Slice 11) and most of Slice 12's API assumptions before code was written. Only F4 (Slice 11 cmds.setAttr doubleArray list form) and F5 (Slice 12 addFlag ≥4-char) escaped the net — both caught within minutes at execute-time by instrumented logging, neither required spec revision.
+- **JSON-path architecture (Slice 11) was the right call**. Slice 12's command is a pure additive feature — no node refactor, no DG dirty-propagation debugging, no migration burden for downstream consumers. Users who only want predict (ship JSON from an external pipeline) pay nothing for users who want train (invoke the command).
+- **Double-environment smoke requirement paid off again**. Maya 2022 and 2025 bit-identical across all 6 smokes in Slice 12 — the Slice 10A/10C shift-left investment is now confirmed as "Phase 2 slices get version-matrix parity for free", not just "for the boring skeleton slices".
+- **Additive Phase 1 amendment pattern worked**. `kernel_params()` (Slice 11) is the first public API evolution of Phase 1 since v1.0.0, and it ships under "additive const getter + test" precedent with zero behavioural change. Future Phase 2B / 2C will use the same pattern when Phase 1 surface gaps surface.
+
+**What to improve in Phase 2B**
+- **Flag-name grep discipline**. Spec said 12 flags with names like `-dim`, `-eps`. Both were silently rejected by Maya. Phase 2B reviewer protocol: check Autodesk devkit samples for similar flag naming choices before dispatching spec to executor. Goal: move F-number catches back to G-number catches.
+- **Generator-based fixture reproducibility**. Slice 11's `generate_tiny_rbf.cpp` pattern worked: fixture data came from the production code path, not hand math. Slice 12 reused the same `tiny_rbf.json` + extended with CSVs generated by consistency (same sample points). Phase 2B Viewport tests will face the same need; carry the pattern forward.
+- **Reserved docstring slots for "unknown Maya API oddities"**. Both Slice 11 F4 and Slice 12 F5 were surface-level Maya gotchas that took ~30 minutes of diagnostic scaffolding to track down (adding `MGlobal::displayError` logging, iterating probe scripts). Phase 2B should budget explicit 30-min "first Maya API run" per slice for API shakeout instead of trying to predict.
+- **Version matrix acceleration**. 10B (Maya 2024) and 10D (Maya 2026) remain unvalidated. Evidence from 10A/10C says the architecture handles them; the blocker is pure devkit availability. Phase 2B entry condition: either resolve one more devkit OR explicitly down-grade 10B/10D to "opportunistic validation when devkit lands".
+
+**Tech-debt register carried into Phase 2B**
+
+| ID | Description | Status |
+|---|---|---|
+| R-17 | Maya 2022 ABI strict-ness (VS2019 vs VS2022 CRT) | closed by 10A/10C evidence |
+| R-18 | mayapy path differences on Linux/macOS | open; not validated locally |
+| R-25 | `MFnDoubleArrayData` round-trip cross-version | closed by 11+12 evidence |
+| R-26 | Lazy-load I/O in hot compute loop | closed by Slice 11 design |
+| R-27 | `unique_ptr<RBFInterpolator>` invariants | closed by 11 smokes |
+| R-28 | JSON path unicode / backslash | closed; `std::ifstream` handles it |
+| R-29 | `cmds.setAttr` doubleArray list form — open living cookbook | carry forward |
+| R-30 | `MSyntax::addFlag` long names must be ≥4 chars — open living cookbook | **new in Slice 12** |
+| T-10 | Autodesk typeId block registration before public distribution | open; Phase 3 or earlier if we ship to external users |
+| T-11 | No training from inside Maya | **closed in Slice 12** |
+| T-12 | v1.1.0 manual GitHub Release | **new in Slice 12**; closes at release |
+| Slice 10B / 10D | Maya 2024 / 2026 validation | open; non-blocking |
+
+**Phase 2B Entry Conditions**
+- mRBFNode + rbfmaxTrainAndSave baseline stable on Maya 2022/2025 (✅ confirmed here).
+- Viewport 2.0 draw override architecture design (`MPxDrawOverride`, `MUIDrawManager`).
+- Heatmap visualisation shader / GL state management approach.
+- Decision on whether to snapshot one more Maya version (10B / 10D) before Phase 2B starts or defer indefinitely.
+
+**Context handoff to future collaborators** (copy-pasting the Phase 1 retrospective rule):
+- **Required reading** before any Phase 2B code change: this DEVLOG from Slice 10A onward, `maya_node/README.md` (attribute contract + command flags), `CHANGELOG.md` `[1.1.0]` entry (what actually ships to users). Phase 2A decisions are committed, not suggestions.
+
+---
+
 ## 2026-04-21 · Slice 11 — mRBFNode real predict via JSON-path load (Phase 2A core)
 
 **Scope**: Phase 2A core functional slice. `mRBFNode` graduates from the Slice 10A HelloNode skeleton to a real predictor — it loads a Phase 1 `RBFInterpolator` from a schema-v1 JSON file and serves `predict()` to downstream plugs. First slice where Phase 1's kernel and solver both run inside a Maya plugin. Double-validated on Maya 2022 + Maya 2025 on first try (Slices 10A/10C investment pays off).
