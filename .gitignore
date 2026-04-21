@@ -76,3 +76,8 @@ desktop.ini
 .unpacked_text.txt
 .remember/
 .claude/
+
+# Installer payload (built .mll copied in by installer/package.py;
+# not checked in because they are large binary build products)
+installer/plug-ins/2022/*.mll
+installer/plug-ins/2025/*.mll
