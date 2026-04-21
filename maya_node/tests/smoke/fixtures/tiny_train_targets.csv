@@ -1,0 +1,6 @@
+# Slice 12 training fixture — 4 target values (N=4, M=1).
+# target = x + y, matches tiny_rbf.json.
+0.0
+1.0
+1.0
+2.0

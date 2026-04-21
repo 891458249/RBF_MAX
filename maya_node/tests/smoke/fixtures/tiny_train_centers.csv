@@ -1,0 +1,7 @@
+# Slice 12 training fixture — 4 corners of the unit square (N=4, D=2).
+# Mirrors tiny_rbf.json's centers so rbfmaxTrainAndSave output can be
+# cross-checked against the Slice 11 expected output table.
+0.0,0.0
+1.0,0.0
+0.0,1.0
+1.0,1.0

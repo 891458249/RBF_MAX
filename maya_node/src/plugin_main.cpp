@@ -1,14 +1,17 @@
 // =============================================================================
-// maya_node/src/plugin_main.cpp — Phase 2A Slice 10A
+// maya_node/src/plugin_main.cpp — Phase 2A Slice 12
 // -----------------------------------------------------------------------------
-// initializePlugin / uninitializePlugin entry points.  Registers the
-// Slice 10A mRBFNode skeleton with Maya.
+// initializePlugin / uninitializePlugin entry points.  Registers:
+//   * Slice 10A : mRBFNode skeleton (HelloNode transform)
+//   * Slice 11  : mRBFNode real predict via JSON-path load
+//   * Slice 12  : rbfmaxTrainAndSave MPxCommand
 // =============================================================================
 #include <maya/MFnPlugin.h>
 #include <maya/MStatus.h>
 
 #include "rbfmax/maya/mrbf_node.hpp"
 #include "rbfmax/maya/plugin_info.hpp"
+#include "rbfmax/maya/rbfmax_train_cmd.hpp"
 
 // Maya 2022+ wraps MStatus (and other API types) in an inline namespace
 // ``Autodesk::Maya::OpenMaya<version>`` for ABI versioning.  Under MSVC
@@ -29,6 +32,7 @@ RBFMAX_PLUGIN_EXPORT MStatus initializePlugin(MObject obj) {
                      rbfmax::maya::kPluginVendor,
                      rbfmax::maya::kPluginVersion,
                      "Any");
+
     MStatus status = plugin.registerNode(
         rbfmax::maya::mRBFNode::kTypeName,
         rbfmax::maya::mRBFNode::kTypeId,
@@ -36,15 +40,39 @@ RBFMAX_PLUGIN_EXPORT MStatus initializePlugin(MObject obj) {
         rbfmax::maya::mRBFNode::initialize);
     if (!status) {
         status.perror("registerNode mRBFNode");
+        return status;
     }
+
+    // Slice 12 — rbfmaxTrainAndSave MPxCommand.
+    status = plugin.registerCommand(
+        rbfmax::maya::RbfmaxTrainCmd::kCommandName,
+        rbfmax::maya::RbfmaxTrainCmd::creator,
+        rbfmax::maya::RbfmaxTrainCmd::newSyntax);
+    if (!status) {
+        status.perror("registerCommand rbfmaxTrainAndSave");
+        // Roll back the node registration so loadPlugin is atomic.
+        plugin.deregisterNode(rbfmax::maya::mRBFNode::kTypeId);
+        return status;
+    }
+
     return status;
 }
 
 RBFMAX_PLUGIN_EXPORT MStatus uninitializePlugin(MObject obj) {
     MFnPlugin plugin(obj);
-    MStatus status = plugin.deregisterNode(rbfmax::maya::mRBFNode::kTypeId);
+
+    MStatus status = plugin.deregisterCommand(
+        rbfmax::maya::RbfmaxTrainCmd::kCommandName);
     if (!status) {
-        status.perror("deregisterNode mRBFNode");
+        status.perror("deregisterCommand rbfmaxTrainAndSave");
+        // Keep unwinding so the node also deregisters.
+    }
+
+    MStatus nodeStatus = plugin.deregisterNode(
+        rbfmax::maya::mRBFNode::kTypeId);
+    if (!nodeStatus) {
+        nodeStatus.perror("deregisterNode mRBFNode");
+        return nodeStatus;
     }
     return status;
 }
