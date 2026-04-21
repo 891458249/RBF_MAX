@@ -4,21 +4,26 @@ Industrial-grade Radial Basis Function interpolation kernel for
 Autodesk Maya and game engines.
 
 [![CI](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml/badge.svg)](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/891458249/RBF_MAX/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/891458249/RBF_MAX/releases/tag/v1.1.0)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-11-orange)](https://en.cppreference.com/w/cpp/11)
 
 ## Status
 
-**Phase 1 complete (v1.0.0).** This release delivers the pure C++
-mathematical kernel, solver, spatial index, and I/O layer — the
-"math foundation" of the plugin. The kernel is Maya-free and
-engine-agnostic: it links against Eigen 3.3.9 and nlohmann/json,
-with GoogleTest as the test dependency and Google Benchmark as the
-optional performance suite.
+**Phase 2A complete (v1.1.0) — Maya node integration + training command.**
+Latest release adds the `mRBFNode` Maya DG node (loads trained JSON and
+serves `predict()`) and the `rbfmaxTrainAndSave` MPxCommand (offline
+training inside Maya, two input modes). Validated on Maya 2022 and
+Maya 2025 with bit-identical output across versions.
 
-**Phase 2** (Maya node integration, Viewport 2.0 visualization,
-Qt6 UI) is planned as a follow-on project.
+**Phase 1 (v1.0.0)** shipped the Maya-free pure C++ mathematical kernel,
+solver, spatial index, and I/O layer — still the foundation underneath.
+It links against Eigen 3.3.9 and nlohmann/json, with GoogleTest and
+Google Benchmark as test / performance dependencies.
+
+**Phase 2B** (Viewport 2.0 draw override + heatmap visualisation)
+and **Phase 2C** (Qt6 UI for pose management) are planned as follow-on
+projects.
 
 ## Quick Start
 
@@ -98,6 +103,10 @@ mathematical derivations (14 chapters) and
 - **Strict numerical contract**: double precision internally,
   explicit NaN propagation, `eigen_assert`-guarded preconditions,
   `noexcept` throughout.
+- **Maya 2022 / 2025 plugin** (since v1.1.0): `mRBFNode` DG node
+  + `rbfmaxTrainAndSave` MPxCommand; both inline (Python lists) and
+  CSV training modes; double-validated bit-identical across Maya
+  versions. See [maya_node/README.md](maya_node/README.md).
 
 ## Building
 
@@ -164,10 +173,15 @@ Key decisions:
 
 ## Roadmap
 
-- **Phase 2**: Maya node integration (`MPxNode` with `kParallel`,
-  Viewport 2.0 `MPxDrawOverride` for debug visualization, Qt6
-  Model/View UI, Swing-Twist driver, pose manager, JSON-backed
-  asset pipeline).
+- **Phase 2A** ✅ (v1.1.0): Maya plugin (`mRBFNode` + `rbfmaxTrainAndSave`
+  MPxCommand) with JSON-path load architecture; Maya 2022 + 2025
+  validated.
+- **Phase 2B** (planned): Viewport 2.0 `MPxDrawOverride` with
+  heatmap visualisation of RBF influence fields; X-ray ordering
+  integration.
+- **Phase 2C** (planned): Qt6 Pose Manager UI (PySide6 Model/View)
+  for browsing / editing training samples; train via the
+  `rbfmaxTrainAndSave` command shipped in 2A.
 - **Phase 3**: TBB `parallel_for` for batch predict on large
   character rigs; GPU compute for offline training.
 - **Phase 4**: Production asset tooling (mirror propagation,

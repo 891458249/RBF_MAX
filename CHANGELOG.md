@@ -14,6 +14,82 @@ _尚无未发布变更。_
 
 ---
 
+## [1.1.0] — 2026-04-21
+
+**Phase 2A complete — Maya node integration + training command.**
+First release with a functional Maya plugin. The pure-C++ Phase 1
+kernel (shipped in v1.0.0) is now reachable from inside Maya through
+two user-visible primitives: a DG node for prediction and an
+MPxCommand for offline training. Validated on Maya 2022 and Maya
+2025 with bit-identical output across versions.
+
+### Added
+- `rbfmax_maya.mll` / `.so` — Maya plugin module linking the Phase 1
+  `rbfmax::solver` static library. Builds at C++14 against Maya 2022
+  ABI, C++17 against Maya 2024 / 2025 / 2026.
+- `mRBFNode` DG node (Slice 10A / 11) — loads a trained schema-v1
+  JSON from `jsonPath`, serves `predict()` through variable-length
+  `queryPoint` / `outputValues` attributes, exposes 6 state readouts
+  (`isLoaded`, `nCenters`, `dimInput`, `dimOutput`, `kernelType`,
+  `statusMessage`). Typeid `0x00013A00` (development range — see
+  DEVLOG T-10 before distribution).
+- `rbfmaxTrainAndSave` MPxCommand (Slice 12) — wraps Phase 1's
+  `RBFInterpolator::fit` + `save` in a single MEL / Python call.
+  Two mutually exclusive input modes:
+    * **inline** — `centers` / `targets` as Python doubleArray lists
+      (for small / interactive cases)
+    * **csv** — `centersFile` / `targetsFile` pointing at comma-
+      separated files (for large / pipeline cases; '#' line comments
+      + blank lines tolerated).
+  Flags: `-jsonPath` (required), `-kernel`, `-epsilon`, `-polyDegree`,
+  `-lambda` (`"auto"` or numeric), `-force`, plus the mode-specific
+  flags above.
+- `RBFInterpolator::kernel_params() const noexcept` — additive
+  getter on the Phase 1 interpolator; drives the node's `kernelType`
+  output attribute without re-parsing the saved JSON. Only Phase 1
+  amendment in Phase 2A; `noexcept` / Maya-free / engine-agnostic
+  contracts preserved.
+- `cmake/FindMaya.cmake` + `cmake/MayaVersionMatrix.cmake` —
+  in-house devkit integration with priority-ordered path resolution
+  (`-DMAYA_DEVKIT_ROOT` → `$MAYA_DEVKIT_ROOT` → `$MAYA_LOCATION` →
+  probe paths) and both "bundled" and "separate" devkit layouts.
+- mayapy smoke tests: `smoke_hellonode.py` (Slice 10A, legacy
+  compatibility), `smoke_predict.py` (Slice 11, JSON-path load +
+  predict bit-identity), `smoke_train.py` (Slice 12, train + load +
+  predict + error-path coverage). All three pass on Maya 2022 and
+  Maya 2025 with identical numerical output.
+- Adapter test coverage: 3 (H group, Slice 10A) + 6 (C group,
+  Slice 11) + 8 (D group, Slice 12) = 17 pure-C++ GTest blocks.
+  Total project tests: **154/154 green** (Phase 1 137 + adapter 17).
+
+### Unchanged
+- Phase 1 API is fully binary-compatible — the lone new symbol is
+  the additive `kernel_params()` getter. Existing `fit` / `predict`
+  / `save` / `load` / `clone` / ScratchPool contracts unchanged.
+- Phase 1 regression still green: 137/137.
+
+### Known limitations
+- Maya 2024 and Maya 2026 not yet validated locally — devkits
+  pending on the development machine. Version-matrix evidence from
+  Slices 10A (2022) and 10C (2025) suggests these will be trivial
+  when devkits land.
+- `mRBFNode` typeId `0x00013A00` is in Autodesk's dev range; any
+  distribution beyond internal development needs an assigned block.
+- `rbfmaxTrainAndSave` is not undoable — the command writes a file
+  and does not track prior content. Advisory in the usage docs.
+- MSyntax long flag names must be ≥ 4 characters (discovered during
+  Slice 12 smoke debugging as F5 / R-30). Documented in
+  `maya_node/README.md` and DEVLOG.
+
+### Build
+- Top-level `project(rbfmax VERSION 1.1.0 LANGUAGES CXX)`.
+- Two independent options gate the Maya subtree:
+  `-DRBF_BUILD_MAYA_NODE=ON` (needs devkit),
+  `-DRBF_BUILD_MAYA_ADAPTER_TESTS=ON` (no devkit). Both default OFF
+  so Phase 1 builds and existing CI remain untouched.
+
+---
+
 ## [1.0.0] — 2026-04-20
 
 **Phase 1 complete.** First major public release. Delivers the
