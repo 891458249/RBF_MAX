@@ -16,7 +16,9 @@ endif()
 
 include(GoogleTest)
 
-add_executable(test_adapter_core test_adapter_core.cpp)
+add_executable(test_adapter_core
+    test_adapter_core.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/adapter_core_csv.cpp)
 
 target_link_libraries(test_adapter_core PRIVATE
     rbfmax::kernel

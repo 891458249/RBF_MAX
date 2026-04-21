@@ -91,5 +91,70 @@ inline bool validate_json_path(const std::string& path) noexcept {
     return f.is_open();
 }
 
+// =========================================================================
+// Slice 12 training-command helpers.
+// =========================================================================
+// Four pure-C++ utilities backing the rbfmaxTrainAndSave MPxCommand.
+// They live here (not in the command TU) so the GTest adapter suite can
+// validate CSV/inline parsing without running Maya.
+
+/// Unflatten a row-major `flat` double array into an N x D MatrixX.
+/// Returns true on success; false if D <= 0, flat is empty, or
+/// flat.size() is not a multiple of D.  On failure `out` is untouched.
+/// Row-major layout: flat[i*D + j] -> out(i, j).
+inline bool unflatten_double_array(const std::vector<double>& flat,
+                                   Eigen::Index D,
+                                   MatrixX& out) noexcept {
+    if (D <= 0) return false;
+    if (flat.empty()) return false;
+    if (static_cast<Eigen::Index>(flat.size()) % D != 0) return false;
+    const Eigen::Index N = static_cast<Eigen::Index>(flat.size()) / D;
+    MatrixX tmp(N, D);
+    for (Eigen::Index i = 0; i < N; ++i) {
+        for (Eigen::Index j = 0; j < D; ++j) {
+            tmp(i, j) = static_cast<Scalar>(
+                flat[static_cast<std::size_t>(i * D + j)]);
+        }
+    }
+    out = std::move(tmp);
+    return true;
+}
+
+/// Cross-platform file-existence probe.  Alias spelling for
+/// validate_json_path that the Slice 12 command uses when checking
+/// "does the target jsonPath already exist?" (for --force gating).
+inline bool file_exists(const std::string& path) noexcept {
+    if (path.empty()) return false;
+    std::ifstream f(path.c_str());
+    return f.is_open();
+}
+
+// ---- Non-inline helpers (implementation in adapter_core_csv.cpp) ------
+
+/// Parse a CSV file into an Eigen MatrixX.
+///   * one non-empty, non-comment line per sample row
+///   * '#' starts a line-level comment (skipped entirely)
+///   * empty lines skipped
+///   * column count must be uniform across all data rows
+///   * cells parsed as double via std::stod; leading/trailing whitespace
+///     is trimmed
+/// On success returns true, writes parsed matrix to `out`, clears
+/// `err_reason`.  On failure returns false, leaves `out` untouched, and
+/// populates `err_reason` with a short diagnostic string.
+/// Not noexcept: string operations may throw std::bad_alloc, which
+/// callers at the command boundary catch.
+bool parse_csv_matrix(const std::string& path,
+                      MatrixX& out,
+                      std::string& err_reason);
+
+/// Parse the --lambda command flag.  Accepts the literal "auto" (any
+/// case) or a numeric string parseable by std::stod end-to-end.  On
+/// success returns true and populates out-params.  On failure returns
+/// false and leaves out-params untouched.
+/// Not noexcept: std::stod may throw.
+bool parse_lambda_arg(const std::string& s,
+                      bool& is_auto,
+                      Scalar& lambda_value);
+
 }  // namespace maya
 }  // namespace rbfmax
