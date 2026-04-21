@@ -12,11 +12,14 @@
 if(RBF_BUILD_MAYA_NODE)
     include(${CMAKE_SOURCE_DIR}/cmake/MayaVersionMatrix.cmake)
     list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-    # Slice 13 (Path B) adds OpenMayaUI (MPxLocatorNode) for mRBFShape.
+    # Slice 13 (Path B) adds OpenMayaUI (MPxLocatorNode) for mRBFShape
+    # and OpenMayaRender (MPxDrawOverride / MDrawRegistry / MUIDrawManager)
+    # for the draw override.
     find_package(Maya REQUIRED COMPONENTS
         OpenMaya
         OpenMayaAnim
         OpenMayaUI       # Slice 13 — mRBFShape : MPxLocatorNode
+        OpenMayaRender   # Slice 13 — mRBFDrawOverride + MDrawRegistry
         Foundation)
 
     # ------------------------------------------------------------------
@@ -40,6 +43,7 @@ if(RBF_BUILD_MAYA_NODE)
         src/adapter_core_csv.cpp     # Slice 12 — non-inline CSV / lambda parsers
         src/rbfmax_train_cmd.cpp     # Slice 12 — rbfmaxTrainAndSave MPxCommand
         src/mrbf_shape.cpp           # Slice 13 — Path B locator host
+        src/mrbf_draw_override.cpp   # Slice 13 — Viewport 2.0 draw override
     )
 
     target_include_directories(rbfmax_maya_node PRIVATE
