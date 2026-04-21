@@ -338,6 +338,62 @@ The command is **not undoable** — it writes a file rather than
 modifying scene state. The `-force` flag is the only guard against
 accidental overwrite.
 
+## Viewport 2.0 visualization — `mRBFShape` (Slice 13)
+
+Slice 13 introduces Viewport 2.0 rendering of a trained `mRBFNode`'s
+centers.  Architecture (Path B): the compute node `mRBFNode` stays a
+pure `kDependNode`; visualization is carried by a separate locator
+node `mRBFShape` connected via a `message` attribute.  The draw
+override is registered against `mRBFShape`'s classification.
+
+### Attributes on `mRBFShape`
+
+| Long name      | Short | Type    | Default | Notes                                                    |
+|----------------|-------|---------|---------|----------------------------------------------------------|
+| `sourceNode`   | `src` | message | —       | Connect from `mRBFNode.message`.                         |
+| `drawEnabled`  | `de`  | bool    | `true`  | Per-shape toggle; when `false` the override draws nothing. |
+| `sphereRadius` | `sr`  | double  | `0.05`  | Radius of each center marker; clamped [0.001, soft 1.0]. |
+
+### Workflow
+
+```python
+import maya.cmds as cmds
+
+cmds.loadPlugin("rbfmax_maya.mll")
+
+# 1. Create the compute node and load a trained JSON (Slice 11 workflow).
+rbf = cmds.createNode("mRBFNode")
+cmds.setAttr(rbf + ".jsonPath", "C:/path/to/rig.json", type="string")
+
+# 2. Create the shape and connect it.
+shp = cmds.createNode("mRBFShape")
+cmds.connectAttr(rbf + ".message", shp + ".sourceNode")
+
+# 3. Switch the viewport to Viewport 2.0 — centers now render as
+#    white filled spheres at the first-3-dim projection of each
+#    fit-center row of the `mRBFNode`'s loaded interpolator.
+#
+# 4. (Optional) Per-shape tweaks:
+cmds.setAttr(shp + ".sphereRadius", 0.1)
+cmds.setAttr(shp + ".drawEnabled", False)  # temporarily hide
+```
+
+### Viewport behaviour notes
+
+- **Dimension projection** — For `D > 3`, only the first 3 columns of
+  `RBFInterpolator::centers()` are drawn.  For `D < 3`, missing
+  coordinates are zero-padded.  This is an intentional simplification
+  for Slice 13; a full DR projection mode is tracked as a Phase 2B
+  follow-up.
+- **Unloaded / broken connection states** — If `mRBFNode.jsonPath` is
+  empty, or points to a missing or malformed file, `mRBFShape` shows
+  nothing.  Same if `sourceNode` has no incoming connection.  No
+  warning is emitted per draw; failures surface through
+  `mRBFNode.statusMessage` / the Slice 11 one-shot `MGlobal::warning`.
+- **Multiple shapes per node** — You can connect the same `mRBFNode`
+  to several `mRBFShape` instances (different views, different LODs).
+  Each shape has independent `drawEnabled` / `sphereRadius`.
+
 ## Known limitations (Slice 10A)
 
 - **Development-range typeId**: `0x00013A00`. This ID is valid for
@@ -364,18 +420,26 @@ accidental overwrite.
 |------|---------|
 | `CMakeLists.txt` | Plugin target + adapter test gate |
 | `include/rbfmax/maya/adapter_core.hpp` | Pure-C++, C++14-compliant helpers (Gaussian eval, attribute marshalling, CSV/lambda parsing) |
-| `include/rbfmax/maya/mrbf_node.hpp` | `MPxNode` declaration — JSON-path load + predict |
+| `include/rbfmax/maya/mrbf_node.hpp` | `MPxNode` declaration — JSON-path load + predict + Slice 13 additive getters |
+| `include/rbfmax/maya/mrbf_shape.hpp` | `MPxLocatorNode` declaration — Slice 13 Viewport 2.0 host |
+| `include/rbfmax/maya/mrbf_draw_override.hpp` | `MPxDrawOverride` declaration — Slice 13 |
+| `include/rbfmax/maya/draw_sink.hpp` | Maya-free `IDrawSink` abstraction — Slice 13 (Slice 14 heatmap consumer) |
 | `include/rbfmax/maya/rbfmax_train_cmd.hpp` | `MPxCommand` declaration for `rbfmaxTrainAndSave` |
 | `include/rbfmax/maya/plugin_info.hpp.in` | CMake-configured constants (version, typeId) |
-| `src/mrbf_node.cpp` | `compute()` + `try_load()` + attribute wiring |
-| `src/plugin_main.cpp` | `initializePlugin` / `uninitializePlugin` — registers node + command |
+| `src/mrbf_node.cpp` | `compute()` + `try_load()` + attribute wiring + Slice 13 accessors |
+| `src/mrbf_shape.cpp` | Slice 13 Path B locator implementation |
+| `src/mrbf_draw_override.cpp` | Slice 13 Viewport 2.0 `prepareForDraw` + `addUIDrawables` |
+| `src/draw_sink_core.cpp` | Slice 13 `emit_centers_draw_calls` — orchestration for Slice 14+ |
+| `src/plugin_main.cpp` | `initializePlugin` / `uninitializePlugin` — registers node + command + shape + draw override |
 | `src/rbfmax_train_cmd.cpp` | `rbfmaxTrainAndSave` `doIt()` implementation |
 | `src/adapter_core_csv.cpp` | Non-inline CSV / lambda parser implementations |
-| `tests/CMakeLists.txt` | Adapter test target (also links `adapter_core_csv.cpp`) |
+| `tests/CMakeLists.txt` | Adapter test target (links `adapter_core_csv.cpp` + `draw_sink_core.cpp`) |
 | `tests/test_adapter_core.cpp` | 17 GTest blocks: H1-H3 (Slice 10A) + C1-C6 (Slice 11) + D1-D8 (Slice 12) |
+| `tests/test_draw_sink.cpp` | 8 GTest blocks: E1-E8 (Slice 13 IDrawSink contract) |
 | `tests/smoke/smoke_hellonode.py` | Slice 10A `mayapy` 4-step contract |
 | `tests/smoke/smoke_predict.py` | Slice 11 `mayapy` 5-step contract (load + predict bit-identity) |
 | `tests/smoke/smoke_train.py` | Slice 12 `mayapy` 4-scenario contract (csv / inline / force / bad-kernel) |
+| `tests/smoke/smoke_viewport.py` | Slice 13 `mayapy` 7-step contract (load + classification + connect + predict + shape attrs) |
 | `tests/smoke/fixtures/tiny_rbf.json` | Slice 11 Phase 1-generated schema-v1 fixture |
 | `tests/smoke/fixtures/tiny_rbf_expected.json` | Slice 11 reference predict outputs |
 | `tests/smoke/fixtures/tiny_train_centers.csv` | Slice 12 CSV fixture matching tiny_rbf's centers |

@@ -14,6 +14,140 @@
 
 ---
 
+## 2026-04-22 · Slice 13 — mRBFShape + mRBFDrawOverride (Path B) — Phase 2B open
+
+**Scope**: Phase 2B opening slice. Introduces Viewport 2.0 visualization for the trained `mRBFNode` via a new auxiliary locator node `mRBFShape`, connected by `message` attribute, hosting the `mRBFDrawOverride` that renders each center as a white filled sphere. Path B architecture after Path A (reparent `mRBFNode → MPxLocatorNode`) hit an unrecoverable Maya registration failure; see retrospective below. No version bump (Phase 2B close-out will bump to 1.2.0).
+
+**Deliverables**
+- `kernel/include/rbfmax/interpolator.hpp` + `kernel/src/interpolator.cpp` — new additive `const MatrixX& centers() const noexcept` getter so draw code can read fit centers without reaching into Phase 1 private state.
+- `kernel/tests/test_interpolator.cpp` — new `RBFInterpolatorState.CentersGetterReflectsFit` test (D-group extension).
+- `maya_node/include/rbfmax/maya/draw_sink.hpp` + `maya_node/src/draw_sink_core.cpp` — new `IDrawSink` / `DrawCall` / `emit_centers_draw_calls` abstraction. Pure-C++, Maya-free; the plugin-side draw override does NOT consume this path in Slice 13 (it calls `MUIDrawManager` directly), but the abstraction is already landed + covered by tests so Slice 14's heatmap mode can plug into it cleanly.
+- `maya_node/tests/test_draw_sink.cpp` — 8 new E-group TEST blocks (E1–E8): mock sink, count + propagation of color/radius, empty input, coord preservation, begin/end balance, defaults. Random seed `kSeedS13 = 0xF5BFACu` reserved.
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp` + `maya_node/src/mrbf_node.cpp` — two additive public read-only accessors `is_loaded()` and `centers_for_viewport()`. `centers_for_viewport` projects the Phase 1 `MatrixX` of centers into the first 3 dims (zero-pad `D<3`, truncate `D>3`) so it can be drawn as `MPoint`s without coupling the override to Eigen. **No change to `mRBFNode` compute, attributes, type, or initialize()** — Phase 2A contract fully preserved.
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp` + `maya_node/src/mrbf_shape.cpp` — **new locator node** `mRBFShape : public MPxLocatorNode`, `kTypeId = 0x00013A01`. Three attributes, deliberately minimal, deliberately NO `MFnTypedAttribute` of `MFnData::kString` (see retrospective below):
+  - `sourceNode` — message, writable, connectable. User connects `mRBFNode.message → mRBFShape.sourceNode`.
+  - `drawEnabled` — bool, default true. Per-shape toggle.
+  - `sphereRadius` — double, default 0.05, min 0.001, softMax 1.0. Per-shape center marker size.
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp` + `maya_node/src/mrbf_draw_override.cpp` — `MPxDrawOverride` registered on `mRBFShape`'s classification `drawdb/geometry/rbfmax/mRBFShape`. `prepareForDraw` upstreams via `shape.sourceNode`'s message connection to resolve the connected `mRBFNode`, then reads `is_loaded() + centers_for_viewport()`. Any failure along that chain yields empty draw data (no crash, no warning). `addUIDrawables` issues one `MUIDrawManager::sphere` per center inside a `beginDrawable/endDrawable` pair.
+- `maya_node/src/plugin_main.cpp` — unchanged 4-arg `registerNode(mRBFNode, …)` (Path B keeps Phase 2A's Slice 10A form) plus **new** 6-arg `registerNode(mRBFShape, …, MPxNode::kLocatorNode, &classificationMString)` and `MDrawRegistry::registerDrawOverrideCreator`. Mirror unwind in `uninitializePlugin`. Rollback on any failure keeps `loadPlugin` atomic.
+- `maya_node/CMakeLists.txt` — adds `OpenMayaRender` + `OpenMayaUI` to `find_package(Maya COMPONENTS …)` for `MPxDrawOverride` + `MPxLocatorNode`. Adds `src/mrbf_shape.cpp` + `src/mrbf_draw_override.cpp` to `rbfmax_maya_node`.
+- `maya_node/tests/smoke/smoke_viewport.py` — 7-step Path B smoke: loadPlugin, type-table membership via `allNodeTypes()`, classification alignment, message connection, Phase 2A predict round-trip, state attrs, per-shape attrs. `mayapy -batch` cannot test actual GL draw, so visual validation is PR-level.
+
+**Design decisions (13 locked pre-slice + Path B pivot)**
+
+The original Slice 13 spec captured 13 upfront decisions (classification format, isAlwaysDirty flag, bbox extent, centers getter location, dim>3 handling, IDrawSink abstraction, etc.). After Path A failure the architecture itself became the 14th decision:
+
+14. **Path B — auxiliary locator, not reparented node** — `mRBFNode` remains a pure `kDependNode` (Phase 2A contract untouched). Viewport 2.0 visualization is hosted on a separate `mRBFShape : MPxLocatorNode` connected by message attribute. Draw override registered against `mRBFShape`'s classification only. See retrospective below for why Path A (reparent `mRBFNode` to `MPxLocatorNode` and register with 6-arg `registerNode`) was abandoned.
+
+**Path A failure analysis — 4+ hour systematic diagnostic**
+
+Slice 13 was originally spec'd to follow the "natural" Autodesk path: reparent `mRBFNode` to `MPxLocatorNode`, change its registration to the 6-arg `registerNode(…, MPxNode::kLocatorNode, &classificationMString)` form, and register the draw override on that classification. On first attempt, `registerNode` returned
+
+```
+registerNode mRBFNode: (kFailure): Unexpected Internal Failure
+Error: initializePlugin function failed (rbfmax_maya)
+```
+
+— Maya's generic internal-failure status with no further information in any published log, trace, or attribute. Applying Rule 4 (systematic assumption elimination) over 4+ hours ruled out, in order:
+
+- **Classification string format** — tested 3-level `drawdb/geometry/rbfmax/mRBFNode` vs 2-level `drawdb/geometry/mRBFNode`: byte-identical `kFailure`.
+- **MString storage lifetime** — tested stack-local, file-scope `static`, anonymous-namespace file-scope (matches the Autodesk `cvColor` sample pattern): byte-identical `kFailure`.
+- **Devkit provenance** — migrated from the bundled Maya 2022 devkit to a freshly downloaded `Maya_2022_5_Update_DEVKIT_Windows` at `C:/SDK/Maya2022/devkitBase`: byte-identical `kFailure`.
+- **Registration order** — "Experiment X" swapped the order so `registerDrawOverrideCreator` ran before `registerNode` (hypothesis: classification must pre-exist in `MDrawRegistry`): byte-identical `kFailure`.
+- **Maya runtime version** — "A-prime" built and ran the same plugin on Maya 2025 via `C:/SDK/Maya2025/devkitBase`. Byte-identical `kFailure`. Rules out "Maya 2022 regression"; this is not a version-specific runtime bug.
+- **Output-only `kString` attribute subset** — "Step II.1" commented out `aKernelType` + `aStatusMessage` (the two `readable+!writable+!storable` typed-string attrs) and all their `addAttribute` / `attributeAffects` / compute writes. Byte-identical `kFailure`. Rules out the most suspicious attr subset.
+- **C++ inheritance chain** — "H5" added two `static_assert`s: `std::is_base_of<MPxLocatorNode, mRBFNode>::value` and `std::is_convertible<mRBFNode*, MPxLocatorNode*>::value`. Both **compiled**, confirming the public reparent took effect. Rules out RTTI / layout drift.
+- **Stale build artifacts** — "H6" nuked `build-maya-2022/` and did a clean `cmake -S . -B … -DMAYA_VERSION=2022 -DMAYA_DEVKIT_ROOT=…` then full build. Byte-identical `kFailure`. Rules out incremental-build staleness.
+
+An out-of-repo reducer (`MinLocator.cpp` / `MinLocator2.cpp` / `MinLocator3.cpp`) established empirically that a minimal `MPxLocatorNode` plus a **single** `MFnTypedAttribute(MFnData::kString, …)` with an `MFnStringData` default `MObject` triggers the same `Unexpected Internal Failure`. Removing the typed-string attr makes the reducer succeed. The exact Maya-internal reason is not determined — the error does not surface through `MStatus::errorString`, `MGlobal::executeCommand("dgdebug -a")`, or any tracing flag we found.
+
+After the combined cost analysis — remaining diagnostic cost (MinLocator binary-search through `mRBFNode`'s attribute set, or dig into Maya's reflection registry via undocumented internals) exceeded Path B's implementation cost — the reviewer channel declared **strategic retreat to Path B**. Path B avoids the failure mode by leaving `mRBFNode` as a `kDependNode` (where Phase 2A already proved its typed-string attrs register fine) and introducing a brand-new locator node whose attribute set is strictly numeric + message — no `MFnTypedAttribute` of `kString`, no output-only typed attrs.
+
+**Path B architecture**
+
+```
+mRBFNode  (MPxNode / kDependNode)            — Phase 2A untouched
+    │  .message ─────►  mRBFShape.sourceNode
+    │                    (message, writable)
+    ▼
+mRBFShape (MPxLocatorNode / kLocatorNode)    — Slice 13 new
+    classification "drawdb/geometry/rbfmax/mRBFShape"
+    attrs: sourceNode (message) + drawEnabled (bool) + sphereRadius (double)
+    │
+    ▼
+mRBFDrawOverride                             — registered on mRBFShape classification
+    prepareForDraw:
+       shape.drawEnabled? → shape.sourceNode.connectedTo → upstream mRBFNode?
+       → mRBFNode->is_loaded() && mRBFNode->centers_for_viewport()
+    addUIDrawables:
+       MUIDrawManager sphere() per center inside begin/endDrawable
+```
+
+Benefits vs Path A:
+- `mRBFNode` zero-touch (no reparent risk; Slice 10A/11/12 all continue working byte-identically).
+- `mRBFShape` uses only numeric + message attrs, so it sidesteps the empirical Path A failure mode. Slice 14 (heatmap) and Slice 15 (X-Ray) must preserve this invariant — configuration going forward lives on `mRBFShape` as `MFnNumericAttribute` / `MFnEnumAttribute`; any string data must stay on `mRBFNode`.
+- Cleaner separation of concerns: compute vs draw, as in `footPrint` / `cvColor` samples.
+- Future-proof: one `mRBFNode` can have multiple `mRBFShape` visualizations (per-view, per-LOD).
+
+Costs:
+- User workflow adds one `connectAttr` step. Documented in `maya_node/README.md`. Consider a `rbfmaxAttachShape` convenience command in a later slice if pipeline feedback demands it.
+- Two new files of mid-size; no added complexity to Phase 2A paths.
+
+**Phase 2B reviewer discipline — concrete lesson (Rule 5 candidate)**
+
+The Path A trajectory revealed a gap in Rule 3 (Maya docs are not self-sufficient). Not only are the docs unverified, but the *registration failure modes* of `registerNode` under `kLocatorNode` + classification are opaque — the `MStatus::errorString` yields a generic line that does not localize the offending attribute. Empirically, the presence of any `MFnTypedAttribute(MFnData::kString)` in `initialize()` flips the outcome.
+
+**New rule candidate** (pending Phase 2B close-out memory entry):
+
+> **Rule 5** — For any Maya API feature attempted for the first time in Phase 2 (`MPxLocatorNode`, `MPxDrawOverride`, `MDrawRegistry`, `MRenderOverride`, …), identify the canonical Autodesk devkit sample pattern. When a spec deviates from that pattern (e.g. "reparent an existing `kDependNode` into a `kLocatorNode`" when every sample creates a `kLocatorNode` fresh), flag the deviation as a pre-dispatch risk and prefer a less ambitious scope that matches the sample pattern exactly, even if the architecture "one node for compute and draw" feels more elegant.
+
+**R-09 typeId self-check**
+- `mRBFNode::kTypeId = 0x00013A00 = 80384` ( < 0x7FFFF = 524287 ✓ dev range)
+- `mRBFShape::kTypeId = 0x00013A01 = 80385` ( < 0x7FFFF ✓ dev range)
+- Monotonic increment; no collision; matches the Phase 2A "one typeId per node type" policy.
+
+**Validation outcomes**
+
+- Adapter + Phase-1 tests (`build-adapter`, ctest): **163/163 passed** (138 Phase 1 + 9 H + 8 C + 8 D + 8 E = 163 after the Slice 13 E additions). 2 tests SKIPPED on Release (Debug-only `*_DebugAssertOnNonUnitAxis` + `BatchPredict_DimensionalityMismatchTrapsInDebug`).
+- Maya 2022 plugin build (`build-maya-2022` clean configure + build, devkit `C:/SDK/Maya2022/devkitBase`): **0 warnings, 0 errors**. Output `rbfmax_maya.mll`.
+- Maya 2025 plugin build (`build-maya-2025` clean configure + build, devkit `C:/SDK/Maya2025/devkitBase`): **0 warnings, 0 errors**. Output `rbfmax_maya.mll`. Cross-version `.mll` bit-identity is NOT expected after Slice 13 (different Maya ABI headers → different object code); recorded as an explicit retrenchment of the Phase 2A "bit-identical across versions" lemma. That lemma applied when the ABI surface was `OpenMaya` only; Slice 13 adds `OpenMayaRender` + `OpenMayaUI`, which diverge between 2022 and 2025 devkits.
+- Maya 2022 × 4 smokes (hellonode, predict, train, viewport): **all exit 0**. Viewport smoke 7/7 steps pass.
+- Maya 2025 × 4 smokes: **all exit 0**. Viewport smoke 7/7 steps pass.
+- Phase 1 pure regression (`build`, no Maya): **138/138 passed**.
+- Visual review (PR body): 4 screenshots — Maya 2022 top + perspective, Maya 2025 top + perspective, `tiny_rbf.json` loaded into an `mRBFNode` connected to an `mRBFShape`. 4 white spheres at the fit-centers' first-3-dim positions.
+
+**Tech-debt / risk register**
+
+- **R-44 (new)** — Path A empirical failure mode: `MPxLocatorNode` + `MFnTypedAttribute(MFnData::kString)` triggers `registerNode kFailure` on Maya 2022 and 2025. Exact Maya-internal reason unresolved. Operational mitigation: Slice 14/15 must keep `mRBFShape`'s attribute set free of any `MFnTypedAttribute(kString)`. Configuration strings belong on `mRBFNode` (where they work under `kDependNode`).
+- **T-16 (new)** — Path B requires the user to `connectAttr mRBFNode.message mRBFShape.sourceNode` manually. Consider a `rbfmaxAttachShape <rbfNode>` MPxCommand in a later slice that creates the shape and wires the connection in one step. Not in Slice 13 scope.
+- **T-17 (new)** — Slice 14 (heatmap) will need a per-center color buffer. `centers_for_viewport()` currently returns positions only. Extend to `centers_for_viewport_colored()` returning `std::vector<std::pair<MPoint, MColor>>` or split into two parallel getters when Slice 14 lands.
+- **T-18 (new)** — `mRBFDrawOverride::boundingBox` uses a fixed `(-10, +10)` cube. Tighten to `centers` extent ± `sphere_radius` in Slice 14+ once heatmap mode forces us to compute per-center colors anyway (cost shared).
+
+**File changes summary**
+
+Added:
+- `kernel/tests/test_interpolator.cpp` +1 TEST block (D-group extension)
+- `maya_node/include/rbfmax/maya/draw_sink.hpp` (new)
+- `maya_node/src/draw_sink_core.cpp` (new)
+- `maya_node/tests/test_draw_sink.cpp` (new)
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp` (new)
+- `maya_node/src/mrbf_shape.cpp` (new)
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp` (new)
+- `maya_node/src/mrbf_draw_override.cpp` (new)
+- `maya_node/tests/smoke/smoke_viewport.py` (new)
+
+Modified:
+- `kernel/include/rbfmax/interpolator.hpp`, `kernel/src/interpolator.cpp` — `centers()` getter
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp`, `maya_node/src/mrbf_node.cpp` — `is_loaded()` + `centers_for_viewport()` additive
+- `maya_node/src/plugin_main.cpp` — `mRBFShape` + `MDrawRegistry` registration
+- `maya_node/CMakeLists.txt` — `OpenMayaRender` + `OpenMayaUI` components; two new sources
+- `maya_node/tests/CMakeLists.txt` — `test_draw_sink.cpp` + `draw_sink_core.cpp` in adapter target
+- `maya_node/README.md` — new "Viewport 2.0 visualization" section (D1)
+
+Zero touches on Phase 1 kernel / solver / io_json code paths. Zero touches on Slice 10A/11/12 `mRBFNode` compute logic. Zero touches on Slice 12 `rbfmaxTrainAndSave` command.
+
+---
+
 ## 2026-04-21 · Slice 12 — rbfmaxTrainAndSave command + v1.1.0 (Phase 2A close-out)
 
 **Scope**: Phase 2A closing slice. Adds the `rbfmaxTrainAndSave` MPxCommand so users can train from inside Maya, closing the Slice 11 JSON-path architecture's "must train externally" gap. Bumps project SemVer to **1.1.0**; tag is pushed by the human channel after PR merge.
