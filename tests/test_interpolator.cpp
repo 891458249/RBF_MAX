@@ -248,7 +248,7 @@ TEST(RBFInterpolatorKdTree, NonGaussianAlwaysDense) {
 }
 
 // =============================================================================
-//  D — State queries (2)
+//  D — State queries (3)
 // =============================================================================
 
 TEST(RBFInterpolatorState, AllGettersAfterFit) {
@@ -281,6 +281,28 @@ TEST(RBFInterpolatorState, GettersBeforeFit) {
     (void)rbf.solver_path();
     (void)rbf.lambda_used();
     (void)rbf.condition_number();
+}
+
+// Slice 11 addition: kernel_params() getter must reflect the kernel
+// stored in the FitResult (i.e. the one used during training / load),
+// not whatever the user passed at construction.  For Slice 11 the Maya
+// node depends on this to populate its aKernelType output attribute
+// without re-parsing the saved JSON file.
+TEST(RBFInterpolatorState, KernelParamsReflectsFit) {
+    InterpolatorOptions opts(KernelParams{KernelType::kGaussian, 1.0});
+    RBFInterpolator rbf(opts);
+
+    // Small hand-crafted 4-corner fit on the unit square in 2D.  Target
+    // is x+y so the problem is genuinely solvable at λ=1e-6.
+    MatrixX C(4, 2);
+    C << 0, 0,  1, 0,  0, 1,  1, 1;
+    MatrixX T(4, 1);
+    T << 0, 1, 1, 2;
+    ASSERT_EQ(rbf.fit(C, T, 1e-6), FitStatus::OK);
+
+    const KernelParams& kp = rbf.kernel_params();
+    EXPECT_EQ(kp.type, KernelType::kGaussian);
+    EXPECT_DOUBLE_EQ(kp.eps, 1.0);
 }
 
 // =============================================================================

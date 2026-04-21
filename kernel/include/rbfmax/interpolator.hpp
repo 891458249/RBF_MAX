@@ -106,6 +106,16 @@ public:
     Scalar              condition_number() const noexcept;
     bool                uses_kdtree()      const noexcept;
 
+    /// The kernel parameters currently in effect.  After fit() or load()
+    /// this reflects the kernel stored in the FitResult (the one actually
+    /// used for training), not the one passed at construction.  Undefined
+    /// semantics before the first successful fit/load — callers should
+    /// gate this on is_fitted().
+    ///
+    /// Added in Phase 2A Slice 11 to let consumers (notably the Maya
+    /// node) report kernel type without re-parsing the saved JSON.
+    const KernelParams& kernel_params()   const noexcept;
+
     // ---- Persistence (Slice 08) -----------------------------------------
     // Convenience methods that delegate to rbfmax::io_json::save / load.
     // Returns true on success; false on any failure (file I/O, schema

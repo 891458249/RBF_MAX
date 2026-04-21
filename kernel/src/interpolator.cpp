@@ -360,6 +360,16 @@ bool RBFInterpolator::uses_kdtree() const noexcept {
     return kdtree_ != nullptr;
 }
 
+const KernelParams& RBFInterpolator::kernel_params() const noexcept {
+    // Returns the kernel inside the FitResult, which is the one actually
+    // used for training / loaded from disk.  Before a successful fit or
+    // load this still returns a defined object (the default-constructed
+    // KernelParams in FitResult's default ctor), so the function itself
+    // remains noexcept — callers enforce the "fitted first" contract via
+    // is_fitted() rather than this getter.
+    return fit_result_.kernel;
+}
+
 // -----------------------------------------------------------------------------
 //  Persistence (Slice 08) — delegate to rbfmax::io_json
 // -----------------------------------------------------------------------------
