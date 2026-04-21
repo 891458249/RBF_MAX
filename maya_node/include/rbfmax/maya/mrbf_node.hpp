@@ -29,8 +29,10 @@
 
 #include <memory>
 #include <string>
+#include <vector>                // Slice 13 — centers_for_viewport()
 
 #include <maya/MObject.h>
+#include <maya/MPoint.h>         // Slice 13 — centers_for_viewport()
 #include <maya/MPxNode.h>
 #include <maya/MStatus.h>
 #include <maya/MString.h>
@@ -76,6 +78,23 @@ public:
     static MObject aDimOutput;         ///< int    — fit_result_.weights.cols()
     static MObject aKernelType;        ///< string — kernel_type_to_string()
     static MObject aStatusMessage;     ///< string — human-readable last status
+
+    // ---- Slice 13 Viewport 2.0 accessors (read-only, additive) ----------
+    //
+    // These are used by mRBFDrawOverride (which is registered on the
+    // separate mRBFShape locator node) to populate its RbfDrawData.
+    // Path B architecture: mRBFNode stays a pure kDependNode; the
+    // mRBFShape locator reads from here over a message connection.
+    //
+    // is_loaded() — true iff a fit_result_ is available via interp_.
+    bool is_loaded() const noexcept;
+
+    // centers_for_viewport() — returns a vector of the fit_result_
+    // centers projected into the first 3 dimensions.  D<3 is zero-
+    // padded; D>3 is truncated.  Returns an empty vector if
+    // !is_loaded().  Always a fresh copy — safe to call from the
+    // draw thread.
+    std::vector<MPoint> centers_for_viewport() const;
 
 private:
     // Owning pointer: RBFInterpolator is move-only (Phase 1 contract).

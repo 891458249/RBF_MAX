@@ -33,10 +33,13 @@
 #include <maya/MObject.h>
 #include <maya/MPlug.h>
 
+#include <maya/MPoint.h>        // Slice 13 — centers_for_viewport()
+
 #include "rbfmax/kernel_functions.hpp"
 #include "rbfmax/interpolator.hpp"
 #include "rbfmax/maya/adapter_core.hpp"
 #include "rbfmax/maya/plugin_info.hpp"
+#include "rbfmax/types.hpp"     // Slice 13 — MatrixX / Eigen::Index
 
 namespace rbfmax {
 namespace maya {
@@ -441,6 +444,38 @@ MStatus mRBFNode::compute(const MPlug& plug, MDataBlock& data) {
         }
         return MS::kSuccess;
     }
+}
+
+// -----------------------------------------------------------------------------
+//  Slice 13 — Viewport 2.0 accessors (Path B: read by mRBFDrawOverride
+//                                     via mRBFShape.sourceNode connection)
+// -----------------------------------------------------------------------------
+//
+// These are additive, read-only, const-qualified; they never touch the
+// DG and never modify Phase 2A state.  Safe to call from the draw
+// thread because every read is either a pointer null-check or a fresh
+// Eigen matrix copy into a new std::vector<MPoint>.
+
+bool mRBFNode::is_loaded() const noexcept {
+    return interp_ != nullptr;
+}
+
+std::vector<MPoint> mRBFNode::centers_for_viewport() const {
+    std::vector<MPoint> out;
+    if (!interp_) {
+        return out;
+    }
+    const ::rbfmax::MatrixX& C = interp_->centers();
+    const Eigen::Index N = C.rows();
+    const Eigen::Index D = C.cols();
+    out.reserve(static_cast<std::size_t>(N));
+    for (Eigen::Index i = 0; i < N; ++i) {
+        const double x = (D > 0) ? static_cast<double>(C(i, 0)) : 0.0;
+        const double y = (D > 1) ? static_cast<double>(C(i, 1)) : 0.0;
+        const double z = (D > 2) ? static_cast<double>(C(i, 2)) : 0.0;
+        out.emplace_back(x, y, z);
+    }
+    return out;
 }
 
 }  // namespace maya
