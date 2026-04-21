@@ -137,6 +137,92 @@ Expected output (abridged):
 The Python-side assertion uses a `1e-12` absolute tolerance (see
 docstring rationale). The native-side adapter tests use `1e-14`.
 
+## Usage (Slice 11)
+
+The Slice 11 `mRBFNode` loads a trained RBF interpolator from a schema-v1
+JSON file on disk and serves `predict()` to downstream plugs. Training
+data is **not** a Maya attribute — train offline, save JSON, set the
+node's `jsonPath`, and the node handles the rest. See the DEVLOG Slice 11
+entry for the "no DG for training data" architecture rationale.
+
+Python (`maya.cmds`) example:
+
+```python
+import maya.cmds as cmds
+
+# Load plugin
+cmds.loadPlugin("rbfmax_maya.mll")
+
+# Create node and point it at a trained JSON file.
+node = cmds.createNode("mRBFNode")
+cmds.setAttr(f"{node}.jsonPath", "C:/path/to/rig.json", type="string")
+
+# Inspect load state.
+print(cmds.getAttr(f"{node}.isLoaded"))      # True
+print(cmds.getAttr(f"{node}.nCenters"))      # e.g. 500
+print(cmds.getAttr(f"{node}.dimInput"))      # e.g. 3
+print(cmds.getAttr(f"{node}.dimOutput"))     # e.g. 1
+print(cmds.getAttr(f"{node}.kernelType"))    # "Gaussian"
+
+# Evaluate predict at a query point (double array).
+cmds.setAttr(f"{node}.queryPoint",
+             3, 0.1, 0.2, 0.3, type="doubleArray")
+print(cmds.getAttr(f"{node}.outputValues"))  # [ ... M-vector ... ]
+
+# Force a reload after the JSON file was edited on disk (path
+# unchanged).
+cmds.setAttr(f"{node}.reloadTrigger",
+             cmds.getAttr(f"{node}.reloadTrigger") + 1)
+```
+
+### Attributes
+
+| Attribute | Type | Direction | Purpose |
+|-----------|------|-----------|---------|
+| `jsonPath` | string | input | Path to a schema-v1 `.json` file produced by `RBFInterpolator::save` |
+| `reloadTrigger` | int | input (keyable) | Bump to force re-read when path is unchanged but file content changed |
+| `queryPoint` | doubleArray | input | N-dimensional query vector; length must match `dimInput` |
+| `inputValue` | double | input | Legacy Slice 10A scalar — routes through `hello_transform` when `jsonPath` is empty |
+| `outputValues` | doubleArray | output | Predict result (length = `dimOutput`) |
+| `outputValue` | double | output | Legacy Slice 10A scalar output |
+| `isLoaded` | bool | output | True after a successful load |
+| `nCenters` | int | output | N from the loaded fit result |
+| `dimInput` | int | output | D from the loaded fit result |
+| `dimOutput` | int | output | M from the loaded fit result |
+| `kernelType` | string | output | One of `Linear`, `Cubic`, `Quintic`, `ThinPlateSpline`, `Gaussian`, `InverseMultiquadric` |
+| `statusMessage` | string | output | Human-readable last-load status ("OK" or a descriptive failure) |
+
+### Failure modes (non-fatal)
+
+`compute()` returns success on every failure path (never breaks DG
+evaluation):
+
+- **`jsonPath` empty or unreadable** → `isLoaded=false`, empty
+  `outputValues`, descriptive `statusMessage`, single `MGlobal`
+  warning per failing path.
+- **`RBFInterpolator::load` returns false** (parse / schema / IO
+  error) → same as above; root cause reported in `statusMessage`.
+- **`queryPoint.length() != dimInput`** → empty `outputValues`;
+  diagnose from the status outputs.
+
+Warning deduplication is keyed on the current path value — a path
+change or a `reloadTrigger` bump resets the "already warned" flag so
+the new path gets its own single warning on failure.
+
+### How to generate a training JSON
+
+Slice 11 ships no in-Maya training command — that is slated for Slice
+12 (`rbfmaxTrainAndSave` MEL / Python). Until then, options are:
+
+1. **Standalone C++ util**: link `rbfmax::solver`, fit an
+   `RBFInterpolator`, call `save("rig.json")`.
+2. **Python binding**: Phase 2C will add a pybind11 wrapper. Until
+   then, hand-write training data in a C++ harness.
+3. **Copy-paste from `maya_node/tests/smoke/fixtures/tiny_rbf.json`**:
+   the Slice 11 smoke fixture is a complete 4-corner example that can
+   be edited manually; useful for experimentation but not a production
+   workflow.
+
 ## Known limitations (Slice 10A)
 
 - **Development-range typeId**: `0x00013A00`. This ID is valid for
