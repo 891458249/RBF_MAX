@@ -49,6 +49,11 @@ VectorX out = rbf.predict(query);
 rbf.save("rig.rbf.json");
 ```
 
+> **For Maya end users**: see [`docs/install.md`](docs/install.md) for
+> the drag-and-drop installer that packages the compiled plugin + a
+> Maya module file into your user preferences — no build step
+> required once the .mll has been packaged.
+
 ## Architecture
 
 Eight independent modules composed into a single `RBFInterpolator`:
