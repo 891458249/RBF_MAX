@@ -12,7 +12,12 @@
 if(RBF_BUILD_MAYA_NODE)
     include(${CMAKE_SOURCE_DIR}/cmake/MayaVersionMatrix.cmake)
     list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-    find_package(Maya REQUIRED COMPONENTS OpenMaya OpenMayaAnim Foundation)
+    # Slice 13 (Path B) adds OpenMayaUI (MPxLocatorNode) for mRBFShape.
+    find_package(Maya REQUIRED COMPONENTS
+        OpenMaya
+        OpenMayaAnim
+        OpenMayaUI       # Slice 13 — mRBFShape : MPxLocatorNode
+        Foundation)
 
     # ------------------------------------------------------------------
     # Generate plugin_info.hpp from the .in template.  Values embedded
@@ -34,6 +39,7 @@ if(RBF_BUILD_MAYA_NODE)
         src/plugin_main.cpp
         src/adapter_core_csv.cpp     # Slice 12 — non-inline CSV / lambda parsers
         src/rbfmax_train_cmd.cpp     # Slice 12 — rbfmaxTrainAndSave MPxCommand
+        src/mrbf_shape.cpp           # Slice 13 — Path B locator host
     )
 
     target_include_directories(rbfmax_maya_node PRIVATE

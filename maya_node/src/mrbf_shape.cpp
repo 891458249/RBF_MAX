@@ -1,0 +1,90 @@
+// =============================================================================
+// maya_node/src/mrbf_shape.cpp — Phase 2B Slice 13 (Path B)
+// -----------------------------------------------------------------------------
+// See mrbf_shape.hpp for the Path A→B retrospective and contract.
+//
+// Strict attribute-set discipline: this node MUST NOT introduce any
+// MFnTypedAttribute of MFnData::kString.  The empirical Path A failure
+// (DEVLOG Slice 13) showed that a locator node carrying such an
+// attribute triggers Maya's "Unexpected Internal Failure" at
+// registerNode time.  Future slices (14 heatmap / 15 X-Ray) must keep
+// this invariant — use MFnNumericAttribute or MFnEnumAttribute for
+// configuration; leave strings on mRBFNode.
+// =============================================================================
+#include "rbfmax/maya/mrbf_shape.hpp"
+
+#include <maya/MFnMessageAttribute.h>
+#include <maya/MFnNumericAttribute.h>
+#include <maya/MPoint.h>
+
+namespace rbfmax {
+namespace maya {
+
+const MString mRBFShape::kTypeName{"mRBFShape"};
+const MTypeId mRBFShape::kTypeId{0x00013A01};
+
+MObject mRBFShape::aSourceNode;
+MObject mRBFShape::aDrawEnabled;
+MObject mRBFShape::aSphereRadius;
+
+mRBFShape::mRBFShape()  = default;
+mRBFShape::~mRBFShape() = default;
+
+void* mRBFShape::creator() {
+    return new mRBFShape();
+}
+
+bool mRBFShape::isBounded() const {
+    return true;
+}
+
+MBoundingBox mRBFShape::boundingBox() const {
+    // Coarse fixed bbox; see hpp for the Slice 14+ tightening note.
+    return MBoundingBox(MPoint(-10.0, -10.0, -10.0),
+                        MPoint( 10.0,  10.0,  10.0));
+}
+
+MStatus mRBFShape::initialize() {
+    MStatus st;
+
+    // ---- sourceNode (message) ----------------------------------------
+    MFnMessageAttribute mAttr;
+    aSourceNode = mAttr.create("sourceNode", "src", &st);
+    if (!st) return st;
+    mAttr.setStorable(true);
+    mAttr.setWritable(true);
+    mAttr.setReadable(true);
+    mAttr.setConnectable(true);
+    st = addAttribute(aSourceNode);
+    if (!st) return st;
+
+    // ---- drawEnabled (bool, default true) ----------------------------
+    MFnNumericAttribute nAttr;
+    aDrawEnabled = nAttr.create("drawEnabled", "de",
+                                MFnNumericData::kBoolean, 1, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setReadable(true);
+    nAttr.setWritable(true);
+    st = addAttribute(aDrawEnabled);
+    if (!st) return st;
+
+    // ---- sphereRadius (double, default 0.05) -------------------------
+    aSphereRadius = nAttr.create("sphereRadius", "sr",
+                                 MFnNumericData::kDouble, 0.05, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setReadable(true);
+    nAttr.setWritable(true);
+    nAttr.setMin(0.001);
+    nAttr.setSoftMax(1.0);
+    st = addAttribute(aSphereRadius);
+    if (!st) return st;
+
+    return MS::kSuccess;
+}
+
+}  // namespace maya
+}  // namespace rbfmax
