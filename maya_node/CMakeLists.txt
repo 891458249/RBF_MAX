@@ -19,7 +19,7 @@ if(RBF_BUILD_MAYA_NODE)
     # into the plugin at compile time for MFnPlugin registration and
     # future diagnostic use.
     # ------------------------------------------------------------------
-    set(RBFMAX_MAYA_PLUGIN_VERSION "1.0.0-phase2a-slice10a")
+    set(RBFMAX_MAYA_PLUGIN_VERSION "1.0.0-phase2a-slice11")
     set(RBFMAX_MAYA_PLUGIN_VENDOR  "891458249 / RBF_MAX")
     # R-09 self-check: 0x00013A00 = 80384 (< 0x7FFFF development-range cap).
     set(RBFMAX_MAYA_NODE_TYPEID    "0x00013A00")
@@ -41,8 +41,12 @@ if(RBF_BUILD_MAYA_NODE)
 
     target_link_libraries(rbfmax_maya_node PRIVATE
         rbfmax::kernel        # Phase 1 INTERFACE target (headers-only)
+        rbfmax::solver        # Phase 1 STATIC lib — Slice 11 first consumer
         Maya::Maya
     )
+    # Position-independent code for rbfmax_solver is already implied by
+    # the top-level CMakeLists.txt (set(CMAKE_POSITION_INDEPENDENT_CODE
+    # ON) at global scope). No per-target override needed here.
 
     target_compile_features(rbfmax_maya_node PRIVATE cxx_std_${MAYA_CXX_STD})
 
