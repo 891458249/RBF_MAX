@@ -14,6 +14,148 @@
 
 ---
 
+## 2026-04-21 · Slice 11 — mRBFNode real predict via JSON-path load (Phase 2A core)
+
+**Scope**: Phase 2A core functional slice. `mRBFNode` graduates from the Slice 10A HelloNode skeleton to a real predictor — it loads a Phase 1 `RBFInterpolator` from a schema-v1 JSON file and serves `predict()` to downstream plugs. First slice where Phase 1's kernel and solver both run inside a Maya plugin. Double-validated on Maya 2022 + Maya 2025 on first try (Slices 10A/10C investment pays off).
+
+**Deliverables**
+- `kernel/include/rbfmax/interpolator.hpp` + `.cpp` + `tests/test_interpolator.cpp` — additive `kernel_params() const noexcept` getter + `RBFInterpolatorState.KernelParamsReflectsFit` test. 3 lines of Phase 1 public surface, noexcept/Maya-free/engine-agnostic.
+- `maya_node/CMakeLists.txt` — plugin now links `rbfmax::solver` (first consumer of the STATIC lib from inside Maya). Plugin version string bumped `1.0.0-phase2a-slice10a → 1.0.0-phase2a-slice11`.
+- `maya_node/include/rbfmax/maya/adapter_core.hpp` — 3 new helpers (`double_vector_to_eigen`, `eigen_to_double_vector`, `validate_json_path`), all C++14-compliant.
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp` + `src/mrbf_node.cpp` — expanded to ~12 attributes (8 inputs / 4 outputs) plus `try_load` helper; ~420 LOC of real compute logic.
+- `maya_node/tests/test_adapter_core.cpp` — 6 new C-group tests (C1–C6).
+- `maya_node/tests/smoke/smoke_predict.py` — 5-step mayapy contract exercising loadPlugin → state inspection → three real predicts with bit-identity assertions → cleanup.
+- `maya_node/tests/smoke/fixtures/{tiny_rbf.json, tiny_rbf_expected.json}` — out-of-repo-generated fixture (see §Fixture reproducibility below).
+- `maya_node/README.md` — Usage section with Python example, full attribute table, failure-mode catalogue.
+
+**Core architecture decision — "training data does not cross DG"**
+
+Training matrices (centers, targets) are NOT Maya attributes. The user trains offline (future `rbfmaxTrainAndSave` command / Python binding / C++ harness), saves schema-v1 JSON, and the node reads it. Rationale: Maya DG dirty tracking over an N×D compound array attribute is far more expensive than one file read at load time; Slice 08's schema-v1 is already the canonical on-disk representation; professional Maya RBF systems (Maya Muscle, facial / AR rigs) all follow this pattern. Keeps node responsibilities clean: predictor + config container.
+
+**15 locked design decisions**
+- **A0** `mRBFNode` / typeId `0x00013A00` — both inherited from Slice 10A.
+- **A1** Training data source: `jsonPath` string attribute + `MFnStringData`.
+- **A2** `aQueryPoint` = typed MFnDoubleArrayData (variable D).
+- **A3** `aOutputValues` = typed MFnDoubleArrayData (variable M).
+- **A4** 6 state-output attributes: `isLoaded` / `nCenters` / `dimInput` / `dimOutput` / `kernelType` / `statusMessage`, all readable-only non-storable.
+- **B1** Load triggered by `jsonPath` change OR `reloadTrigger` bump; both in attributeAffects chain.
+- **B2** Load failure → full reset (interp_ = nullptr, outputs zero/empty, statusMessage populated).
+- **B3** Lazy load on first compute that sees a non-empty, changed path.
+- **C1** `std::unique_ptr<RBFInterpolator> interp_` matches the move-only contract.
+- **C2** No node-side pool management — `RBFInterpolator` already owns its ScratchPool (Slice 06/07).
+- **C3** kdtree threshold is a Phase 1 default (256); not exposed as a node attribute.
+- **D1** `compute()` always returns kSuccess on JSON-path paths. Failures surface via `statusMessage` + `isLoaded=false` + empty `outputValues`.
+- **D2** Single `MGlobal::displayWarning` per failing path (dedup via `warned_about_current_path_`, reset on path or reloadTrigger change).
+- **E1** Scheduling `kNormal` (MPxNode default). RBFInterpolator is non-thread-safe; Phase 2 may upgrade with clone()-per-thread.
+- **F1** `adapter_core.hpp` extended with 3 pure-C++ helpers that the GTest suite can cover without Maya runtime.
+
+**Spec-drift catches (4 pre-write, 1 mid-execution)**
+
+Reviewer channel caught four drifts during pre-flight Phase 1 API grep:
+- **G1** Smoke assertion string `"kGaussian"` → `"Gaussian"` (`kernel_type_to_string` strips the `k` enumerator prefix). Grep'd `kernel_functions.hpp:237`.
+- **G2/G3** No public kernel-type getter existed on `RBFInterpolator`. The Section G prohibition "❌ 改 Phase 1 ... 任何代码" internally contradicted the `aKernelType` requirement in the same spec. Reviewer evaluated paths A (node-side JSON re-parse) / B (additive getter on RBFInterpolator) / C (drop `aKernelType`) and chose **B** despite executor's initial A-leaning recommendation. Rationale: A transfers an encapsulation gap to every future consumer (Phase 2C UI, external C++ bindings, cross-DCC); B is 3 LOC noexcept/Maya-free additive code with zero behavioural risk. The Section G prohibition was amended from "any Phase 1 code" to "any Phase 1 behavioural code" with explicit allowance for additive const getters + tests — documented here as precedent for future Phase 2 slices.
+- **G4** spec §A5 included redundant `set_property(TARGET rbfmax_solver PROPERTY POSITION_INDEPENDENT_CODE ON)` — `CMakeLists.txt:36` already sets `CMAKE_POSITION_INDEPENDENT_CODE ON` globally. Dropped.
+
+Executor caught one more drift during the first predict-smoke run:
+- **F4** `cmds.setAttr("x.foo", count, v0, v1, type="doubleArray")` with unpacked count + values silently truncated to a 1-element array in both Maya 2022 and 2025. Correct invocation is `cmds.setAttr("x.foo", [v0, v1], type="doubleArray")` (pass a Python list, length is implicit). Fixed in `smoke_predict.py` before the final run. The symptom was `getAttr("...outputValues")` returning `None` — because our `compute()` saw `queryArr.length() == 1 != dim() == 2` and wrote an empty `MDoubleArray`. Investigation order: added defensive probe script, printed `queryPoint` readback `[2.0]` instead of `[0.5, 0.5]`, traced back to the setAttr form.
+
+**Tolerance register**
+- `RBFInterpolatorState.KernelParamsReflectsFit` — `EXPECT_DOUBLE_EQ(1.0, 1.0)` exact; `EXPECT_EQ` on enum. Double literal `1.0` is bit-identical through construction → FitResult → getter; zero wiggle room needed.
+- adapter C1–C6 round-trip — `EXPECT_DOUBLE_EQ` / exact `==`. Memcpy-equivalent code path; err=0 observed in all cases.
+- smoke_predict bit-identity — `1e-10` absolute; observed `err=0` on all 3 queries on both Maya 2022 and 2025. The tolerance is defence in depth against unknown DG internal double round-trips; empirically unused.
+
+**Fixture reproducibility (committed-to-DEVLOG record)**
+
+`maya_node/tests/smoke/fixtures/{tiny_rbf.json, tiny_rbf_expected.json}` were generated ONCE out-of-repo by a standalone C++ util. The util is NOT committed (not project source), but its content is recorded here for full auditability:
+
+```cpp
+// scripts/generate_tiny_rbf.cpp — Slice 11 fixture generator
+// Build against Phase 1 rbfmax::solver in Release, run once.
+//
+// Usage:
+//   generate_tiny_rbf <tiny_rbf.json> <tiny_rbf_expected.json>
+//
+// Fits a 4-corner 2D Gaussian RBF (N=4, D=2, M=1, eps=1,
+// poly_degree=-1, lambda=1e-6, target=x+y), calls rbf.save() for
+// tiny_rbf.json, then calls predict on three queries and writes
+// results to tiny_rbf_expected.json.
+#include <cmath>
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <nlohmann/json.hpp>
+#include <rbfmax/interpolator.hpp>
+#include <rbfmax/kernel_functions.hpp>
+#include <rbfmax/types.hpp>
+
+int main(int argc, char** argv) {
+    using namespace rbfmax;
+    MatrixX C(4, 2);  C << 0,0, 1,0, 0,1, 1,1;
+    MatrixX T(4, 1);  T << 0, 1, 1, 2;
+    InterpolatorOptions opts(KernelParams(KernelType::kGaussian, 1.0));
+    opts.poly_degree = -1;
+    RBFInterpolator rbf(opts);
+    rbf.fit(C, T, 1e-6);
+    rbf.save(argv[1]);
+
+    struct Q { double x, y; };
+    const std::vector<Q> queries = { {0,0}, {0.5,0.5}, {2,2} };
+    nlohmann::json out;
+    out["description"] = "Slice 11 smoke fixture ...";
+    for (const auto& q : queries) {
+        VectorX x(2); x << q.x, q.y;
+        VectorX y = rbf.predict(x);
+        out["queries"].push_back({{"query", {q.x, q.y}},
+                                   {"expected", {y(0)}}});
+    }
+    std::ofstream(argv[2]) << out.dump(2);
+    return 0;
+}
+```
+
+The reference outputs ship inside `tiny_rbf_expected.json`:
+- `query=[0.0, 0.0]` → `expected=[6.220699456105372e-07]` — note this is NOT zero. Tikhonov λ=1e-6 smooths sample-point reconstruction by exactly this amount; Phase 1's Slice 05 G1 reconstruction test uses a 0.1 RMSE tolerance on random samples precisely because this smoothing is expected.
+- `query=[0.5, 0.5]` → `expected=[1.2966324126539757]` — interpolation overshoots the linear target `x+y=1.0` because Gaussian ε=1 is not a linear basis.
+- `query=[2.0, 2.0]` → `expected=[0.23584037247987003]` — far-field decay.
+
+**Phase 1 amendment (scope exception)**
+
+Section G's original "不改 Phase 1 任何代码" was amended to "不改 Phase 1 任何行为性代码" with explicit allowance for additive const getters accompanied by tests. `RBFInterpolator::kernel_params() const noexcept` lands under this allowance, along with `RBFInterpolatorState.KernelParamsReflectsFit`. No behavioural change to fit / predict / save / load / clone. Precedent documented here for future Phase 2 slices encountering similar Phase 1 surface gaps.
+
+**Tech-debt register additions**
+- **R-25** `MFnDoubleArrayData` round-trip across Maya versions — validated identical on 2022 + 2025. Closed.
+- **R-26** Lazy-load I/O pattern — implemented: load only on path change or reloadTrigger bump, not per-frame. Closed.
+- **R-27** unique_ptr<RBFInterpolator> + move semantics + kdtree/ScratchPool invariants — validated end-to-end through fresh/reset/reload cycles in smoke_predict. Closed.
+- **R-28** JSON path unicode / backslash escape — `validate_json_path` uses `std::ifstream` so C++ runtime handles this. Windows + Linux consistent. Closed.
+- **R-29** `cmds.setAttr` for `doubleArray`: unpacked `count,v0,v1,…` form silently truncates to 1 element — must use Python list form. Documented in smoke script comments and `maya_node/README.md` Usage section. **Open** as a living Maya API cookbook note for future Phase 2 scripts.
+- **T-11** Slice 11 ships no `save` API on the node — users must train offline. Deferred to Slice 12 (`rbfmaxTrainAndSave` command). **Open**.
+- **T-12** Phase 1 API amendment (kernel_params getter) — 1.1.0 bump target still Phase 2A end. **Open**.
+
+**Validation outcomes** (Windows 11, MSVC 19.44.35223)
+
+| Step | Command summary | Result |
+|------|-----------------|--------|
+| 1 | `build-adapter` Release with `RBF_BUILD_MAYA_ADAPTER_TESTS=ON` | **146/146 green**, 12.56 s (137 Phase 1 + 3 H + 6 C) |
+| 2a | Maya 2022 plugin build | 0 warn 0 err, **158 208 bytes** |
+| 2b | Maya 2025 plugin build | 0 warn 0 err, **158 208 bytes** (byte-identical to 2022 — source-level code is ABI-agnostic and both toolchains produce equivalent object code from it) |
+| 3a | Maya 2022: hellonode + predict smokes | both **exit 0**; all 3 predict queries err=0 exactly (well below 1e-10 tolerance); all 6 state attributes report correctly |
+| 3b | Maya 2025: hellonode + predict smokes | both **exit 0**; values bit-identical to 2022 — Phase 2A version-matrix decoupling validated in its first real business-logic test |
+| 4 | Phase 1 Release regression | **137/137 green**, 10.20 s (unchanged from v1.0.0 + kernel_params test) |
+
+The double-environment validation (Step 3a vs 3b bit-identity) is the single most valuable signal this slice produces: it confirms the Slice 10A/10C "shift-left + version-agnostic" design carries through to real business logic, so Phase 2 slices from here on get "code bug vs version bug" disambiguation for free.
+
+**Workflow note**
+- Branch `slice-11-mrbfnode-predict` → 4 commits (feat(kernel) / build(cmake) / feat(maya) / docs(devlog)) → PR → CI 3 Phase 1 jobs (Maya opts default OFF) → human approve → rebase merge → auto-delete.
+- No tag, no version bump (D14). `v1.1.0` is still the Phase 2A-end target.
+
+**Outstanding after Slice 11**
+- **Slice 12** — `rbfmaxTrainAndSave` MEL/Python command: closes T-11 so users can train inside Maya. Likely also where v1.1.0 ships.
+- **Slice 10B** — Maya 2024 validation. Non-blocking.
+- **Slice 10D** — Maya 2026 validation. Non-blocking.
+- **Phase 2B / 2C** — Viewport 2.0 draw override, Qt6 UI. Not before v1.1.0.
+
+---
+
 ## 2026-04-21 · Slice 10C — Maya 2025 devkit validation
 
 **Scope**: Phase 2A validation slice. Activates the Maya 2025 branch of `cmake/MayaVersionMatrix.cmake` (`MAYA_CXX_STD=17`) and validates that the Slice 10A build chain works unchanged against the Maya 2025 devkit + Python 3.11 mayapy. Second of 4 Phase 2A version-matrix slices: **10A = 2022 ✅, 10C = 2025 ✅**, 10B = 2024 / 10D = 2026 still pending.
