@@ -78,11 +78,35 @@ public:
     // heatmapMode (enum, default 0=Off) — Slice 14 HM-1.
     //   0 = Off               (uniform white spheres, Slice 13 default)
     //   1 = Center Weights    (per-center viridis from row-L2 weight norm)
-    //   2 = Prediction Field  (placeholder; Slice 15 will activate;
-    //                          currently falls back to Off)
+    //   2 = Prediction Field  (Slice 15 — viridis grid via predict_batch)
     // Field indices MUST match the HeatmapMode enum in
     // rbfmax/maya/color_mapping.hpp.
     static MObject aHeatmapMode;
+
+    // Slice 15 — HM-2 (prediction field) + X-Ray (XR-1).
+    //
+    // gridResolution (int, default 16, range [2, 64]) — points per side
+    // of the sample grid; total samples = G^2.  Capped at 64 in attribute
+    // metadata (channel-box slider); the underlying color_mapping sanity
+    // cap is 256, so out-of-range values from setAttr are clamped at the
+    // adapter layer too.
+    static MObject aGridResolution;
+
+    // gridExtent (double, default 2.0, min 0.01, softMax 100.0) — half-
+    // width of the XY sample area in local space.  Grid covers
+    // [-gridExtent, +gridExtent] x [-gridExtent, +gridExtent].
+    static MObject aGridExtent;
+
+    // gridZ (double, default 0.0, no clamp) — Z-plane height for D >= 3
+    // input dimensions.  Ignored for D <= 2 input.
+    static MObject aGridZ;
+
+    // xrayMode (bool, default false) — when true, raise the
+    // MUIDrawManager depth priority so centers + grid render on top of
+    // scene geometry.  See mrbf_draw_override.cpp for the priority
+    // values (raw integers — Maya 2022/2025 expose no DepthPriority enum
+    // on MUIDrawManager).
+    static MObject aXRayMode;
 };
 
 }  // namespace maya

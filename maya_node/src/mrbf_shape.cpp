@@ -28,6 +28,10 @@ MObject mRBFShape::aSourceNode;
 MObject mRBFShape::aDrawEnabled;
 MObject mRBFShape::aSphereRadius;
 MObject mRBFShape::aHeatmapMode;       // Slice 14 — HM-1
+MObject mRBFShape::aGridResolution;    // Slice 15 — HM-2
+MObject mRBFShape::aGridExtent;        // Slice 15 — HM-2
+MObject mRBFShape::aGridZ;             // Slice 15 — HM-2
+MObject mRBFShape::aXRayMode;          // Slice 15 — XR-1
 
 mRBFShape::mRBFShape()  = default;
 mRBFShape::~mRBFShape() = default;
@@ -99,6 +103,48 @@ MStatus mRBFShape::initialize() {
     eAttr.setKeyable(false);
     eAttr.setChannelBox(true);
     st = addAttribute(aHeatmapMode);
+    if (!st) return st;
+
+    // ---- Slice 15 — HM-2 grid (resolution / extent / z) --------------
+    aGridResolution = nAttr.create("gridResolution", "gr",
+                                   MFnNumericData::kInt, 16, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setChannelBox(true);
+    nAttr.setMin(2);
+    nAttr.setMax(64);
+    st = addAttribute(aGridResolution);
+    if (!st) return st;
+
+    aGridExtent = nAttr.create("gridExtent", "ge",
+                               MFnNumericData::kDouble, 2.0, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setChannelBox(true);
+    nAttr.setMin(0.01);
+    nAttr.setSoftMax(100.0);
+    st = addAttribute(aGridExtent);
+    if (!st) return st;
+
+    aGridZ = nAttr.create("gridZ", "gz",
+                          MFnNumericData::kDouble, 0.0, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setChannelBox(true);
+    st = addAttribute(aGridZ);
+    if (!st) return st;
+
+    // ---- Slice 15 — X-Ray (XR-1) -------------------------------------
+    aXRayMode = nAttr.create("xrayMode", "xr",
+                             MFnNumericData::kBoolean, 0, &st);
+    if (!st) return st;
+    nAttr.setStorable(true);
+    nAttr.setKeyable(false);
+    nAttr.setChannelBox(true);
+    st = addAttribute(aXRayMode);
     if (!st) return st;
 
     return MS::kSuccess;
