@@ -107,6 +107,19 @@ public:
     // RbfDrawData's cache key only).
     const ::rbfmax::MatrixX& weights() const noexcept;
 
+    // Slice 15 (HM-2) — input dimensionality D of the loaded interpolator,
+    // or 0 if !is_loaded().  Used by mRBFDrawOverride to size the grid
+    // sample buffer for build_grid_sample_points (which needs D to know
+    // how many columns to fill).
+    Eigen::Index input_dim() const noexcept;
+
+    // Slice 15 (HM-2) — batch predict over a (G^2 x D) sample matrix.
+    // Returns a (G^2 x M) matrix of predictions, or an empty matrix
+    // when !is_loaded() or samples is empty.  Wraps Phase 1
+    // RBFInterpolator::predict_batch with the load-state guard.
+    ::rbfmax::MatrixX predict_batch_samples(
+        const ::rbfmax::MatrixX& samples) const;
+
 private:
     // Owning pointer: RBFInterpolator is move-only (Phase 1 contract).
     // We reset() on failed load / path change and construct a new
