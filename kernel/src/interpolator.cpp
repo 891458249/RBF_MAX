@@ -377,6 +377,13 @@ const MatrixX& RBFInterpolator::centers() const noexcept {
     return fit_result_.centers;
 }
 
+const MatrixX& RBFInterpolator::weights() const noexcept {
+    // Same contract as centers(): FitResult.weights is always a valid
+    // (possibly 0x0) Eigen matrix; before any fit/load it is the
+    // default-constructed zero-size matrix.  Slice 14 (HM-1) consumer.
+    return fit_result_.weights;
+}
+
 // -----------------------------------------------------------------------------
 //  Persistence (Slice 08) — delegate to rbfmax::io_json
 // -----------------------------------------------------------------------------
