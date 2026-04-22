@@ -428,6 +428,62 @@ Implementation notes:
   the buffer, when the matrix is resized, or when the user switches
   the heatmap mode.
 
+### Prediction Field (Slice 15 — HM-2)
+
+When `heatmapMode = Prediction Field` (value 2), `mRBFShape` samples
+the trained interpolator on a 2D grid in local space and renders each
+sample point as a small viridis-colored sphere.  The trained centers
+themselves remain drawn in white on top of the grid for visual contrast.
+
+| Attribute | Short | Default | Range | Meaning |
+|-----------|-------|---------|-------|---------|
+| `gridResolution` | `gr` | `16` | `[2, 64]` | Points per side (G); total samples = G² |
+| `gridExtent` | `ge` | `2.0` | `[0.01, ∞)` | Half-width of the XY sample area in local space |
+| `gridZ` | `gz` | `0.0` | any | Z-plane height for `D ≥ 3` input dims |
+
+```python
+# Switch to prediction-field mode and tune the grid.
+cmds.setAttr(shp + ".heatmapMode", 2)        # 2 = Prediction Field
+cmds.setAttr(shp + ".gridResolution", 32)    # ~1024 sample points
+cmds.setAttr(shp + ".gridExtent", 3.0)       # covers [-3, +3] x [-3, +3]
+cmds.setAttr(shp + ".gridZ", 0.5)            # only matters if D >= 3
+```
+
+Dimension handling for the input dim `D` of the loaded interpolator:
+
+- `D == 1` — only the `gx` coordinate of each sample is used; `gy`
+  and `gridZ` discarded.  Layout is still G² points (a 1D probe
+  laid out on a square just for visualization parity).
+- `D == 2` — `(gx, gy)` per sample.  This is the natural case for
+  most rig poses.
+- `D == 3` — `(gx, gy, gridZ)` per sample.  Move `gridZ` to slice
+  the field at different heights.
+- `D ≥ 4` — `(gx, gy, gridZ, 0, 0, ...)`.  Higher dimensions get
+  zero-filled; configure them via the upstream rig if needed.
+
+`mRBFDrawOverride::prepareForDraw` caches the grid colors keyed on
+the weights buffer pointer plus `(gridResolution, gridExtent, gridZ)`.
+`predict_batch` only fires when one of those changes or when the
+mode itself flips.
+
+### X-Ray mode (Slice 15 — XR-1)
+
+```python
+cmds.setAttr(shp + ".xrayMode", True)   # raise depth priority
+cmds.setAttr(shp + ".xrayMode", False)  # back to default
+```
+
+When `xrayMode = True`, both centers and the prediction-field grid
+are drawn with a higher Viewport 2.0 depth priority (raw 10 vs the
+Slice 13 default 5), so they are not occluded by surrounding scene
+geometry.  This is most useful when previewing a rig embedded in
+a character mesh.
+
+Maya 2022 / 2025 expose only the raw integer overload of
+`MUIDrawManager::setDepthPriority`; there is no `DepthPriority`
+enum on that class in either version, so the implementation uses
+literal integers (5 and 10) with comments explaining the choice.
+
 ## Known limitations (Slice 10A)
 
 - **Development-range typeId**: `0x00013A00`. This ID is valid for

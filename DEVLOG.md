@@ -14,6 +14,82 @@
 
 ---
 
+## 2026-04-22 · Slice 15 — Heatmap HM-2 (prediction field) + X-Ray (XR-1)
+
+**Scope**: Phase 2B third slice. Activates `HeatmapMode::kPredictionField` (the field reserved in Slice 14 with a fallback to `kOff`) by sampling the trained interpolator on a 2D grid in local space and rendering each sample as a small viridis-colored sphere. Adds `xrayMode` so the locator's centers + grid render on top of scene geometry. No version bump.
+
+**Deliverables**
+
+- `maya_node/include/rbfmax/maya/color_mapping.hpp` + `maya_node/src/color_mapping.cpp` — two new pure-C++14, Maya-free helpers `build_grid_sample_points` (G² × D sample matrix from local-space grid params) and `compute_grid_colors` (mirrors `compute_center_colors`, applies viridis LUT to row-L2 norms of `predict_batch` outputs).
+- `maya_node/tests/test_color_mapping.cpp` — 8 new G-group tests (G1–G8): grid layout for D=2/3/1/5, invalid-G defensive behavior, ascending-norm coloring, all-equal degenerate, NaN safety. Random seed `kSeedS15 = 0xF5BFAEu` reserved.
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp` + `maya_node/src/mrbf_node.cpp` — two additive accessors `input_dim()` (returns `interp_->dim()` or 0) and `predict_batch_samples(const MatrixX&)` (load-state-guarded wrapper around Phase 1 `predict_batch`). Phase 2A `compute()` / `try_load()` zero-touch.
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp` + `maya_node/src/mrbf_shape.cpp` — four new attrs appended to `initialize()`: `aGridResolution` (int, default 16, range [2, 64]), `aGridExtent` (double, default 2.0, min 0.01, softMax 100.0), `aGridZ` (double, default 0.0), `aXRayMode` (bool, default false). Slice 13/14 attrs (`aSourceNode` / `aDrawEnabled` / `aSphereRadius` / `aHeatmapMode`) untouched.
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp` — `RbfDrawData` extended with `grid_positions` / `grid_colors` / `grid_sphere_radius` (default 0.015) + grid cache key (`last_grid_resolution` / `last_grid_extent` / `last_grid_z`) + `xray_mode` flag. Slice 13/14 fields preserved.
+- `maya_node/src/mrbf_draw_override.cpp` — `prepareForDraw` adds the HM-2 branch (cache-aware `predict_batch_samples` + `compute_grid_colors`) and reads `xrayMode`; the Slice 14 `kPredictionField -> kOff` fallback is retired. `addUIDrawables` is now three-stage: depth priority pick (5 default / 10 X-Ray), Stage 1 grid (HM-2 only), Stage 2 centers (per-mode coloring). Slice 13 `supportedDrawAPIs` / `boundingBox` / `isBounded` untouched.
+- `maya_node/tests/smoke/smoke_viewport.py` — round-trip block extended for `heatmapMode=2` + `gridResolution` + `gridExtent` + `gridZ` + `xrayMode`, then restored to clean state pre-cleanup so saved scenes don't leak Slice-15-only configs.
+- `maya_node/README.md` — two new subsections inside the Viewport 2.0 section: "Prediction Field (Slice 15 — HM-2)" with attribute table + workflow + dim handling + cache key, and "X-Ray mode (Slice 15 — XR-1)" with the raw-integer rationale.
+
+**Design decisions (10 locked pre-slice)**
+
+1. HM-2 reuses the existing `aHeatmapMode` enum value 2 reserved by Slice 14 — no enum reorder, no scene-compat risk.
+2. Grid is XY-plane in local space, Z fixed by `gridZ`. Slice 16+ may add 3D volumetric, but the spec's strict no-MRenderItem / no-volumetric clause keeps it 2D for now.
+3. `gridResolution` channel-box max is 64 (G² = 4096 points). Underlying `build_grid_sample_points` caps at 256 (sanity), so `setAttr` from Python can go higher without crash but channel slider stays clean.
+4. `gridExtent` `softMax = 100.0` — soft cap because rig pose-space rarely exceeds ±100, but the artist can drag past it for diagnostics.
+5. Per-frame normalization over predict_batch outputs (same as Slice 14 HM-1) — keeps the visual contract consistent. T-19 alternatives (log/percentile) deferred.
+6. Centers always render in white during HM-2 to provide contrast against the colored grid. Switching to colored centers in HM-2 would compete visually with the grid.
+7. X-Ray uses raw `setDepthPriority(unsigned int)` because A2 pre-flight found no `DepthPriority` enum on `MUIDrawManager` in either Maya 2022 or 2025. Values 5 (default) and 10 (X-Ray) hard-coded with comments; documented in README so users / Slice 16+ devs know not to look for an enum.
+8. `mRBFNode::input_dim()` and `predict_batch_samples()` are the third additive extension to `mRBFNode` (after Slice 13's `is_loaded` + `centers_for_viewport`, Slice 14's `weights`). All const, all noexcept-equivalent (predict_batch_samples wraps the noexcept Phase 1 call). Phase 2A logic untouched.
+9. Cache key for HM-2: weights buffer pointer + matrix shape + grid params + cached mode. `predict_batch` only fires on real change. Switching modes invalidates the cache via mode mismatch (correctness) and clears the grid arrays (no stale points draw after toggling back to kOff).
+10. G1-G8 tests use the same `kViridisTol = 1e-2f` as Slice 14 F-group; G6/G7 test the same anchors as F7/F8 but on grid-sized inputs to confirm the mirror implementation.
+
+**Phase 2B reviewer discipline — continuation**
+
+- mRBFNode 累计 5 个 additive 公开方法（Slice 13: 2 + Slice 14: 1 + Slice 15: 2），全部 const + 零 Phase 2A 改动 — Slice 13 Path B 架构持续证明 "additive 扩展不污染 compute() / try_load()" 是可持续的。
+- Slice 13 R-44 invariant 仍然成立: mRBFShape 只新增 numeric / bool attr，**没有任何 MFnTypedAttribute(MFnData::kString)**。
+- A2 pre-flight 发现 MUIDrawManager 无 DepthPriority enum，触发 raw-integer fallback，立即在代码 + README 都注明 — Phase 2B Rule 3（Maya docs unverified）的实际应用。
+
+**R-09 self-check**
+
+- G-group tolerance: `kViridisTol = 1e-2f` reused (G6 anchors at v=0/v=1, G7 at v=0). Within the contract.
+- HM-2 cache key: `weights.data() + rows + cols + (gridRes, gridExtent, gridZ) + last_cached_mode`. All scalars/pointers, no race; `prepareForDraw` runs on main thread.
+- `build_grid_sample_points` invariant: `out_samples.rows() == G² && out_samples.cols() == max(input_dim, 0)`. 5 invalid-input branches all return empty matrix (G5 enumerates them).
+- typeId reservations unchanged — Slice 15 added no new node types.
+
+**Validation outcomes**
+
+- Adapter + Phase 1 tests (`build-adapter`, ctest): **180/180 passed** (139 Phase 1 + 3 H + 6 C + 8 D + 8 E + 8 F + 8 G = 180).
+- Maya 2022 plugin build (`build-maya-2022`, devkit `C:/SDK/Maya2022/devkitBase`): **0 warnings, 0 errors** (after F-stop #6 transient lock; see below).
+- Maya 2025 plugin build (`build-maya-2025`, devkit `C:/SDK/Maya2025/devkitBase`): **0 warnings, 0 errors**.
+- Maya 2022 × 4 smokes (hellonode, predict, train, viewport): all PASS. Viewport smoke now exercises `heatmapMode=2` + 3 grid attrs + `xrayMode`.
+- Maya 2025 × 4 smokes: all PASS.
+- Phase 1 pure regression (`build`, no Maya): **139/139 passed** — invariant: Slice 15 zero Phase 1 touch.
+- Visual review: 4 screenshots pending user-side GUI session (Maya 2022 HM-2 / HM-2+X-Ray, Maya 2025 HM-2 / HM-2+X-Ray).
+
+**F-stop register**
+
+- **F-stop #6 (transient, environment)** — Maya 2022 build #2a hit `LNK1104: cannot open rbfmax_maya.mll` because Slice 14 visual-review hot-load (`cmds.loadPlugin('X:/.../build-maya-2022/.../rbfmax_maya.mll')`) had locked the build-tree `.mll` in the user's open Maya 2022 GUI session. Resolved by user `cmds.unloadPlugin('rbfmax_maya')` in that session. Not a code bug; logged as a **dev-loop pattern** for Phase 2B+: hot-loading from `build-maya-<ver>/.../rbfmax_maya.mll` blocks subsequent CMake links until manual unloadPlugin or Maya restart. Mitigation candidate (Slice 16): a `scripts/dev_unload.py` one-liner script artists can drop into their Maya `userSetup` keybind.
+
+**Tech-debt / risk register**
+
+- No new R-/T- entries this slice. R-44 (Path A failure) and R-45 (kPredictionField fallback retired) both remain on the books — R-45 can be marked "resolved by Slice 15" once this PR merges.
+
+**File changes summary**
+
+Modified (no new files):
+- `kernel/...` — zero touches (invariant)
+- `maya_node/include/rbfmax/maya/color_mapping.hpp`, `maya_node/src/color_mapping.cpp` — `build_grid_sample_points` + `compute_grid_colors`
+- `maya_node/tests/test_color_mapping.cpp` — G1-G8
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp`, `maya_node/src/mrbf_node.cpp` — `input_dim()` + `predict_batch_samples()`
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp`, `maya_node/src/mrbf_shape.cpp` — 4 new static MObjects + `initialize()` extension
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp` — RbfDrawData fields + cache key extension + `xray_mode`
+- `maya_node/src/mrbf_draw_override.cpp` — `prepareForDraw` HM-2 branch + xray read; `addUIDrawables` 3-stage rewrite + depth priority
+- `maya_node/tests/smoke/smoke_viewport.py` — Slice 15 attribute round-trip
+- `maya_node/README.md` — "Prediction Field" + "X-Ray mode" subsections
+
+Zero touches on Phase 1 kernel/solver/io_json/interpolator. Zero touches on Slice 10A/11/12 mRBFNode `compute()` / `try_load()` / Slice 12 train-cmd. Zero touches on Slice 13 mrbf_draw_override `supportedDrawAPIs` / `boundingBox` / `isBounded` / classification. Zero touches on Slice 14 `map_scalar_to_color` / `compute_center_colors` LUT.
+
+---
+
 ## 2026-04-22 · Slice 14 — Heatmap HM-1 (per-center viridis coloring)
 
 **Scope**: Phase 2B second slice. Adds the first viewport heatmap mode (HM-1) so artists can read at a glance which trained centers carry the largest weights for the current rig. Wires through Phase 1 weights → adapter color-mapping → mRBFShape enum attribute → Viewport 2.0 per-center colored spheres. No version bump.
