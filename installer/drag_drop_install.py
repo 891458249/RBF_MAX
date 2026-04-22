@@ -70,15 +70,43 @@ def _maya_version():
 
 
 def _user_modules_dir():
-    """返回用户 Maya modules 目录（创建如不存在）。"""
-    if sys.platform == "win32":
-        base = os.path.join(os.path.expanduser("~"), "Documents", "maya")
-    elif sys.platform == "darwin":
-        base = os.path.expanduser(
-            "~/Library/Preferences/Autodesk/maya")
-    else:
-        base = os.path.expanduser("~/maya")
-    modules_dir = os.path.join(base, "modules")
+    """返回用户 Maya modules 目录（创建如不存在）。
+
+    FIX (slice-13 installer followup): 原实现用 os.path.expanduser("~")
+    解析 Windows 家目录。当用户设了 HOME 环境变量（Git Bash / MSYS /
+    Cygwin / WSL 等会改它指向 Documents），expanduser("~") 返回
+    C:/Users/<user>/Documents 而非 C:/Users/<user>，拼接出双
+    "Documents/Documents/maya/modules"，.mod 文件落到 Maya 扫描不到的
+    位置，用户看到安装成功但插件无法加载。
+
+    修复方案: Maya 内优先用 cmds.internalVar(userAppDir=True)（Maya 内部
+    用 SHGetFolderPath 解析，不受 HOME 干扰）。非 Maya fallback 在
+    Windows 下强制用 USERPROFILE（Windows 标准、不被 Unix 工具污染）。
+    """
+    base = None
+    if _IN_MAYA:
+        try:
+            # Maya 的路径解析不受 HOME 干扰
+            user_app_dir = cmds.internalVar(userAppDir=True)
+            if user_app_dir:
+                # userAppDir 通常带尾斜杠: "C:/Users/.../Documents/maya/"
+                base = user_app_dir.rstrip("/").rstrip("\\")
+        except Exception:  # noqa: BLE001
+            base = None
+
+    if base is None:
+        if sys.platform == "win32":
+            # Fallback: 优先 USERPROFILE，不用 expanduser("~")
+            user_home = (os.environ.get("USERPROFILE")
+                         or os.path.expanduser("~"))
+            base = os.path.join(user_home, "Documents", "maya")
+        elif sys.platform == "darwin":
+            base = os.path.expanduser(
+                "~/Library/Preferences/Autodesk/maya")
+        else:
+            base = os.path.expanduser("~/maya")
+
+    modules_dir = os.path.join(base, "modules").replace("\\", "/")
     if not os.path.isdir(modules_dir):
         os.makedirs(modules_dir)
     return modules_dir
