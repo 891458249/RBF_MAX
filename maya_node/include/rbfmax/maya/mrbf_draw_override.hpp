@@ -88,6 +88,24 @@ public:
     Eigen::Index  last_weights_rows = 0;
     Eigen::Index  last_weights_cols = 0;
     HeatmapMode   last_cached_mode  = HeatmapMode::kOff;
+
+    // Slice 15 — HM-2 prediction-field grid.
+    // Filled by prepareForDraw when heatmap_mode == kPredictionField;
+    // consumed by addUIDrawables.  Empty in other modes.
+    std::vector<MPoint>                grid_positions;
+    std::vector<std::array<float, 4>>  grid_colors;
+    float                              grid_sphere_radius = 0.015f;
+
+    // Cache key extension for HM-2 — beyond the weights buffer key,
+    // the grid also depends on resolution / extent / z.  Any of these
+    // changing invalidates the grid cache.
+    int     last_grid_resolution = 0;
+    double  last_grid_extent     = 0.0;
+    double  last_grid_z          = 0.0;
+
+    // Slice 15 — XR-1 X-Ray mode flag (read each frame from the shape's
+    // xrayMode plug; consumed by addUIDrawables to bump depth priority).
+    bool    xray_mode            = false;
 };
 
 class mRBFDrawOverride : public MHWRender::MPxDrawOverride {

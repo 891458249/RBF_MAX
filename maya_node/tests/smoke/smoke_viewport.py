@@ -132,6 +132,29 @@ def main():
             "heatmapMode round-trip to 0 (Off) failed"
         print("[Slice14] heatmapMode functional (Off <-> CenterWeights)")
 
+        # Slice 15 — verify HM-2 grid + X-Ray attributes round-trip.
+        cmds.setAttr("{0}.heatmapMode".format(shape), 2)  # kPredictionField
+        assert cmds.getAttr("{0}.heatmapMode".format(shape)) == 2, \
+            "heatmapMode round-trip to 2 (PredictionField) failed"
+        cmds.setAttr("{0}.gridResolution".format(shape), 8)
+        assert cmds.getAttr("{0}.gridResolution".format(shape)) == 8, \
+            "gridResolution round-trip failed"
+        cmds.setAttr("{0}.gridExtent".format(shape), 1.5)
+        assert abs(cmds.getAttr("{0}.gridExtent".format(shape)) - 1.5) < 1e-12, \
+            "gridExtent round-trip failed"
+        cmds.setAttr("{0}.gridZ".format(shape), 0.25)
+        assert abs(cmds.getAttr("{0}.gridZ".format(shape)) - 0.25) < 1e-12, \
+            "gridZ round-trip failed"
+        cmds.setAttr("{0}.xrayMode".format(shape), True)
+        assert cmds.getAttr("{0}.xrayMode".format(shape)) is True, \
+            "xrayMode round-trip to True failed"
+        print("[Slice15] HM-2 attrs functional (heatmapMode=2 + grid + xray)")
+
+        # Restore to clean state before cleanup so saved scenes aren't
+        # left in a Slice-15-only configuration.
+        cmds.setAttr("{0}.heatmapMode".format(shape), 0)
+        cmds.setAttr("{0}.xrayMode".format(shape), False)
+
         # Cleanup.
         cmds.delete(shape, rbf_node)
         cmds.flushUndo()
