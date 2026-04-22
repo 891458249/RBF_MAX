@@ -14,6 +14,88 @@
 
 ---
 
+## 2026-04-22 · Slice 14 — Heatmap HM-1 (per-center viridis coloring)
+
+**Scope**: Phase 2B second slice. Adds the first viewport heatmap mode (HM-1) so artists can read at a glance which trained centers carry the largest weights for the current rig. Wires through Phase 1 weights → adapter color-mapping → mRBFShape enum attribute → Viewport 2.0 per-center colored spheres. No version bump.
+
+**Deliverables**
+
+- `kernel/include/rbfmax/interpolator.hpp` + `kernel/src/interpolator.cpp` — additive `const MatrixX& weights() const noexcept` getter (mirror of Slice 13's `centers()`).
+- `tests/test_interpolator.cpp` — new `RBFInterpolatorState.WeightsGetterReflectsFit` (Phase 1 count: 138 → 139).
+- `maya_node/include/rbfmax/maya/color_mapping.hpp` + `maya_node/src/color_mapping.cpp` — pure-C++14, Maya-free module exposing `HeatmapMode` enum, `map_scalar_to_color(Scalar)`, and `compute_center_colors(MatrixX&, std::array<float,4>*, std::size_t)`.  Color map is an 11-stop piecewise-linear viridis LUT after a polynomial-fit pivot (see "F-stop #5" below).
+- `maya_node/tests/test_color_mapping.cpp` — 8 new F-group TEST blocks (F1–F8): three viridis anchor checks, two clamping tests, alpha invariance, ascending-norm mapping, all-equal degenerate fallback. Random seed `kSeedS14 = 0xF5BFADu` reserved for future randomised additions.
+- `maya_node/tests/CMakeLists.txt` — `test_color_mapping.cpp` + `color_mapping.cpp` linked into adapter test binary.
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp` + `maya_node/src/mrbf_node.cpp` — additive `const MatrixX& weights() const noexcept`. Returns a static empty matrix when `!is_loaded()` so the DrawOverride can read it unconditionally. Phase 2A `compute()` / `try_load()` zero-touch.
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp` + `maya_node/src/mrbf_shape.cpp` — new static `aHeatmapMode` enum attribute with three fields (Off/Center Weights/Prediction Field). Field indices match the `HeatmapMode` enum values.
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp` — `RbfDrawData` extended with per-center colors vector, current `heatmap_mode`, and a 4-tuple cache key (`weights.data()` pointer + rows + cols + last cached mode).
+- `maya_node/src/mrbf_draw_override.cpp` — `prepareForDraw` reads `heatmapMode` plug; for `kCenterWeights` it computes (or reuses cached) per-center colors; `kPredictionField` gracefully degrades to `kOff`. `addUIDrawables` switches to per-sphere `setColor` when colors are populated, otherwise keeps the Slice 13 single-color batch path. Slice 13's `supportedDrawAPIs` / `boundingBox` / `isBounded` / classification — untouched.
+- `maya_node/CMakeLists.txt` — `src/color_mapping.cpp` added to plugin sources.
+- `maya_node/tests/smoke/smoke_viewport.py` — extended with a `heatmapMode` round-trip (`Off ↔ CenterWeights`).
+- `maya_node/README.md` — new "Heatmap mode (Slice 14 — HM-1)" subsection covering attribute, workflow, LUT precision contract, NaN fallback, and cache key.
+
+**Design decisions (12 locked pre-slice)**
+
+1. `weights()` getter on `RBFInterpolator` is additive const, mirrors Slice 13's `centers()`. Same noexcept + 0×0-empty-on-no-fit semantics.
+2. Color mapping module is Maya-free (pure C++14 + Eigen); compiled into adapter tests so F-group runs on any CI node.
+3. `HeatmapMode` is a `enum class : std::int16_t`; underlying short matches MFnEnumAttribute field indices for direct cast.
+4. Three modes locked even though Slice 14 only implements two — `kPredictionField=2` reserved so Slice 15 can land without enum-renumber risk (which would invalidate scenes saved between slices).
+5. `kPredictionField` falls back to `kOff` in Slice 14, not error — keeps the viewport responsive when an artist saves a scene with the future mode and reopens it under a Slice-14-only build.
+6. Heat = row L2 norm. Alternative (per-row max-abs) considered, rejected: L2 is rotation-invariant in output dim and matches "energy" intuition that artists ground-truth with.
+7. Normalization is per-frame min/max, not absolute. Side effect: identical scenes with different `nCenters` get the same color spread. Acceptable for HM-1; HM-2 (Slice 15) can revisit.
+8. NaN/Inf in weights → that single center renders white, others use the finite min/max range. Defensive (NaN can leak from edge solver paths) and visually distinguishable from any LUT color.
+9. Cache key is `weights.data()` pointer + rows + cols + cached mode. Pointer compare is cheap and correct because `RBFInterpolator::fit` swaps the underlying `MatrixX` (different `data()`) on every successful call. Slice 11/12 `try_load` does the same via move.
+10. Color recomputation happens in `prepareForDraw`, not `addUIDrawables` — the latter must run on the render thread and stay branch-light.
+11. LUT vs polynomial — initial spec called for a polynomial fit; F1/F2/F3 failed by ~0.4 absolute against the spec's own reference values (spec coefficients did not actually approximate viridis at any reasonable v). Pivoted to an 11-stop LUT with anchors at v=0/0.5/1 matching F1/F2/F3 exactly. See "F-stop #5" below.
+12. `addUIDrawables` issues one `setColor` + `sphere` pair per center in heatmap mode. Maya 2022/2025 docs both confirm this is the canonical idiom; batched single-color rendering remains the kOff path for unchanged Slice 13 behavior.
+
+**R-09 self-check**
+
+- viridis LUT: 11 stops × 3 floats = 132 bytes static data. Linear interpolation between adjacent stops produces ≤ 0.05 per-channel deviation against matplotlib's 256-entry LUT at intermediate v values; F1/F2/F3 anchor values match exactly. Within the 1e-2 tolerance contract at the three checkpoints.
+- Cache key: pointer compare is well-defined for `Eigen::MatrixX::data()` because the underlying buffer lifetime is tied to the matrix object; `RBFInterpolator::fit` constructs a fresh `FitResult` (new buffer), and load does a move (new buffer). No ABA risk for the duration of a single Maya session.
+- typeId reservations unchanged — Slice 14 added no new node types.
+
+**Validation outcomes**
+
+- Adapter + Phase-1 tests (`build-adapter`, ctest): **172/172 passed** (139 Phase 1 + 3 H + 6 C + 8 D + 8 E + 8 F = 172).
+- Maya 2022 plugin build (`build-maya-2022`, devkit `C:/SDK/Maya2022/devkitBase`): **0 warnings, 0 errors**.
+- Maya 2025 plugin build (`build-maya-2025`, devkit `C:/SDK/Maya2025/devkitBase`): **0 warnings, 0 errors**.
+- Maya 2022 × 4 smokes (hellonode, predict, train, viewport): all PASS. Viewport smoke now includes the Slice 14 `heatmapMode` round-trip step.
+- Maya 2025 × 4 smokes: all PASS.
+- Phase 1 pure regression (`build`, no Maya): **139/139 passed**.
+- Visual review: 4 screenshots pending user-side GUI session (Maya 2022 kOff + kCenterWeights, Maya 2025 kOff + kCenterWeights). Tracked in PR description.
+
+**F-stop register**
+
+- **F-stop #5 (resolved)** — viridis quartic-polynomial coefficients in the original spec failed F1/F2/F3 by 0.038–0.486 per channel against the spec's own reference values. The polynomial form (`r = a0 + a1·t + a2·t² + a3·t³ + a4·t⁴`) gave at v=1: r=0.507 (expected 0.993), b=0.441 (expected 0.144) — clearly fitting a different curve than viridis. Spec already prescribed the recovery path ("LUT fallback"), executed exactly: 11-stop piecewise-linear LUT with anchors at the three F1/F2/F3 reference points, intermediates as linear interpolation between anchors. Single rebuild → 172/172.
+
+**Tech-debt / risk register**
+
+- **R-45 (new)** — `HeatmapMode::kPredictionField` is registered as enum field 2 but currently degrades to `kOff` in `prepareForDraw`. Slice 15 (HM-2) activates the actual prediction-field rendering. Risk: a scene saved with `heatmapMode=2` under Slice 15 then opened under Slice 14 will silently render uniform white. Acceptable because the slice ordering goes 14 → 15 (no version of mRBFMax in the wild has Slice 15 without Slice 14).
+- **T-19 (new)** — Per-frame `min`/`max` normalization makes color spread context-dependent. A 2-cluster rig where one cluster is dominant will hide intra-cluster variation in the dominated cluster. HM-2 (Slice 15) or a future HM-1.1 should consider alternatives (log-scale, percentile clipping).
+- **T-20 (new)** — LUT precision is `1e-2` at three anchor points only. Intermediate v values may drift by `~0.05` against matplotlib viridis. Visual review will determine if this matters. If yes, expand LUT to 16 or 33 stops with mpl-sourced values.
+
+**File changes summary**
+
+Added:
+- `maya_node/include/rbfmax/maya/color_mapping.hpp`
+- `maya_node/src/color_mapping.cpp`
+- `maya_node/tests/test_color_mapping.cpp`
+
+Modified:
+- `kernel/include/rbfmax/interpolator.hpp`, `kernel/src/interpolator.cpp` — `weights()` getter
+- `tests/test_interpolator.cpp` — `WeightsGetterReflectsFit` (+~20 LOC)
+- `maya_node/include/rbfmax/maya/mrbf_node.hpp`, `maya_node/src/mrbf_node.cpp` — `weights()` accessor (additive)
+- `maya_node/include/rbfmax/maya/mrbf_shape.hpp`, `maya_node/src/mrbf_shape.cpp` — `aHeatmapMode` enum attribute
+- `maya_node/include/rbfmax/maya/mrbf_draw_override.hpp`, `maya_node/src/mrbf_draw_override.cpp` — RbfDrawData extension + cached per-center color path
+- `maya_node/CMakeLists.txt` — `src/color_mapping.cpp` added
+- `maya_node/tests/CMakeLists.txt` — `test_color_mapping.cpp` + `color_mapping.cpp` added
+- `maya_node/tests/smoke/smoke_viewport.py` — `heatmapMode` round-trip
+- `maya_node/README.md` — "Heatmap mode (Slice 14 — HM-1)" subsection
+
+Zero touches on Phase 1 kernel/solver/io_json behavior. Zero touches on Slice 10A/11/12 mRBFNode `compute()` / `try_load()` / Slice 12 train-cmd code. Zero touches on Slice 13 mrbf_draw_override `supportedDrawAPIs` / `boundingBox` / `isBounded` / classification or mrbf_shape pre-`return MS::kSuccess` lines.
+
+---
+
 ## 2026-04-22 · Slice 13 — mRBFShape + mRBFDrawOverride (Path B) — Phase 2B open
 
 **Scope**: Phase 2B opening slice. Introduces Viewport 2.0 visualization for the trained `mRBFNode` via a new auxiliary locator node `mRBFShape`, connected by `message` attribute, hosting the `mRBFDrawOverride` that renders each center as a white filled sphere. Path B architecture after Path A (reparent `mRBFNode → MPxLocatorNode`) hit an unrecoverable Maya registration failure; see retrospective below. No version bump (Phase 2B close-out will bump to 1.2.0).
