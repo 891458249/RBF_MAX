@@ -394,6 +394,40 @@ cmds.setAttr(shp + ".drawEnabled", False)  # temporarily hide
   to several `mRBFShape` instances (different views, different LODs).
   Each shape has independent `drawEnabled` / `sphereRadius`.
 
+### Heatmap mode (Slice 14 — HM-1)
+
+`mRBFShape` has a `heatmapMode` enum attribute controlling how each
+center is colored in the viewport:
+
+| Mode             | Value | Slice 14 behavior                                                |
+|------------------|-------|------------------------------------------------------------------|
+| Off              | 0     | Uniform white spheres (Slice 13 default)                         |
+| Center Weights   | 1     | Each center colored by its L2 weight norm via a viridis ramp     |
+| Prediction Field | 2     | Reserved for Slice 15 — currently falls back to Off              |
+
+```python
+# Switch to weight-based heatmap.
+cmds.setAttr(shp + ".heatmapMode", 1)
+
+# Back to uniform white.
+cmds.setAttr(shp + ".heatmapMode", 0)
+```
+
+Implementation notes:
+
+- Color map is an 11-stop piecewise-linear viridis LUT
+  (`color_mapping.cpp`).  Anchors at v=0 / v=0.5 / v=1 match
+  matplotlib reference values within 1e-2 per channel.
+- For each center i, `heat[i] = weights.row(i).norm()`; the heat
+  vector is normalized to `[0, 1]` (per-frame `min`/`max` over finite
+  rows), then mapped through the LUT.  Centers with `NaN`/`Inf`
+  weights fall back to white.
+- `mRBFDrawOverride::prepareForDraw` caches the per-center color
+  vector keyed on the underlying weights buffer pointer + shape +
+  mode.  Recomputation only happens when `fit()` / `load()` swaps
+  the buffer, when the matrix is resized, or when the user switches
+  the heatmap mode.
+
 ## Known limitations (Slice 10A)
 
 - **Development-range typeId**: `0x00013A00`. This ID is valid for
