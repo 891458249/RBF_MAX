@@ -74,6 +74,15 @@ public:
     // center markers.  Range clamped [0.001, soft 1.0] via
     // setMin / setSoftMax in initialize().
     static MObject aSphereRadius;
+
+    // heatmapMode (enum, default 0=Off) — Slice 14 HM-1.
+    //   0 = Off               (uniform white spheres, Slice 13 default)
+    //   1 = Center Weights    (per-center viridis from row-L2 weight norm)
+    //   2 = Prediction Field  (placeholder; Slice 15 will activate;
+    //                          currently falls back to Off)
+    // Field indices MUST match the HeatmapMode enum in
+    // rbfmax/maya/color_mapping.hpp.
+    static MObject aHeatmapMode;
 };
 
 }  // namespace maya

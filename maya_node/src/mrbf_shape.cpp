@@ -13,6 +13,7 @@
 // =============================================================================
 #include "rbfmax/maya/mrbf_shape.hpp"
 
+#include <maya/MFnEnumAttribute.h>     // Slice 14 — aHeatmapMode
 #include <maya/MFnMessageAttribute.h>
 #include <maya/MFnNumericAttribute.h>
 #include <maya/MPoint.h>
@@ -26,6 +27,7 @@ const MTypeId mRBFShape::kTypeId{0x00013A01};
 MObject mRBFShape::aSourceNode;
 MObject mRBFShape::aDrawEnabled;
 MObject mRBFShape::aSphereRadius;
+MObject mRBFShape::aHeatmapMode;       // Slice 14 — HM-1
 
 mRBFShape::mRBFShape()  = default;
 mRBFShape::~mRBFShape() = default;
@@ -81,6 +83,22 @@ MStatus mRBFShape::initialize() {
     nAttr.setMin(0.001);
     nAttr.setSoftMax(1.0);
     st = addAttribute(aSphereRadius);
+    if (!st) return st;
+
+    // ---- heatmapMode (enum, default 0=Off) -- Slice 14 ---------------
+    // Field indices MUST match the HeatmapMode enum in
+    // rbfmax/maya/color_mapping.hpp (kOff=0 / kCenterWeights=1 /
+    // kPredictionField=2).
+    MFnEnumAttribute eAttr;
+    aHeatmapMode = eAttr.create("heatmapMode", "hm", 0, &st);
+    if (!st) return st;
+    eAttr.addField("Off",              0);
+    eAttr.addField("Center Weights",   1);
+    eAttr.addField("Prediction Field", 2);
+    eAttr.setStorable(true);
+    eAttr.setKeyable(false);
+    eAttr.setChannelBox(true);
+    st = addAttribute(aHeatmapMode);
     if (!st) return st;
 
     return MS::kSuccess;
