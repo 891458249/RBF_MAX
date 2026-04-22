@@ -478,5 +478,17 @@ std::vector<MPoint> mRBFNode::centers_for_viewport() const {
     return out;
 }
 
+// Slice 14 (HM-1) — direct weights getter for the heatmap path.
+// We return the interpolator's underlying matrix when loaded; when
+// not loaded we expose a static empty matrix so the caller need not
+// branch on is_loaded() before calling shape queries.
+const ::rbfmax::MatrixX& mRBFNode::weights() const noexcept {
+    static const ::rbfmax::MatrixX kEmpty;
+    if (!interp_) {
+        return kEmpty;
+    }
+    return interp_->weights();
+}
+
 }  // namespace maya
 }  // namespace rbfmax

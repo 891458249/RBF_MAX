@@ -122,6 +122,16 @@ def main():
         print("[7/7] mRBFShape attrs functional (drawEnabled=True, "
               "sphereRadius round-trips)")
 
+        # Slice 14 — verify aHeatmapMode enum attribute exists and
+        # round-trips between Off (0) and CenterWeights (1).
+        cmds.setAttr("{0}.heatmapMode".format(shape), 1)
+        assert cmds.getAttr("{0}.heatmapMode".format(shape)) == 1, \
+            "heatmapMode round-trip to 1 (CenterWeights) failed"
+        cmds.setAttr("{0}.heatmapMode".format(shape), 0)
+        assert cmds.getAttr("{0}.heatmapMode".format(shape)) == 0, \
+            "heatmapMode round-trip to 0 (Off) failed"
+        print("[Slice14] heatmapMode functional (Off <-> CenterWeights)")
+
         # Cleanup.
         cmds.delete(shape, rbf_node)
         cmds.flushUndo()
