@@ -127,6 +127,16 @@ public:
     /// the interpolator internals.
     const MatrixX&      centers()         const noexcept;
 
+    /// The weights matrix (N × M) from the most recent successful fit()
+    /// or load(). Returns a default-constructed 0×0 matrix when
+    /// !is_fitted(). Row i holds the coefficient vector for center i
+    /// across all M output dimensions.
+    ///
+    /// Added in Phase 2B Slice 14 (HM-1) to let the Viewport 2.0
+    /// DrawOverride compute per-center heatmap colors from the L2
+    /// norm of each row.
+    const MatrixX&      weights()         const noexcept;
+
     // ---- Persistence (Slice 08) -----------------------------------------
     // Convenience methods that delegate to rbfmax::io_json::save / load.
     // Returns true on success; false on any failure (file I/O, schema

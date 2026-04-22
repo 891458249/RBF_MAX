@@ -330,6 +330,26 @@ TEST(RBFInterpolatorState, CentersGetterReflectsFit) {
     }
 }
 
+// Slice 14 — weights() exposes FitResult::weights for the Viewport 2.0
+// HM-1 heatmap.  Shape (N × M) checked here; numeric values depend on the
+// solver path and are covered by Phase 1 solver tests.
+TEST(RBFInterpolatorState, WeightsGetterReflectsFit) {
+    InterpolatorOptions opts(KernelParams{KernelType::kGaussian, 1.0});
+    RBFInterpolator rbf(opts);
+
+    MatrixX C(4, 2);
+    C << 0, 0,  1, 0,  0, 1,  1, 1;
+    MatrixX T(4, 1);
+    T << 0, 1, 1, 2;
+    ASSERT_EQ(rbf.fit(C, T, 1e-6), FitStatus::OK);
+
+    const MatrixX& W = rbf.weights();
+    ASSERT_EQ(W.rows(), 4);
+    ASSERT_EQ(W.cols(), 1);
+    EXPECT_TRUE(W.allFinite());
+    EXPECT_GT(W.cwiseAbs().sum(), 1e-10);
+}
+
 // =============================================================================
 //  E — clone() (2)
 // =============================================================================
