@@ -111,6 +111,47 @@ MUserData* mRBFDrawOverride::prepareForDraw(
         data->sphere_radius = static_cast<float>(radius);
     }
 
+    // --- Slice 14 HM-1 — heatmap mode + per-center colors --------------
+    HeatmapMode mode = HeatmapMode::kOff;
+    {
+        MPlug hmPlug = shapeFn.findPlug(mRBFShape::aHeatmapMode, true);
+        short mode_i = 0;
+        hmPlug.getValue(mode_i);
+        mode = static_cast<HeatmapMode>(mode_i);
+        // PredictionField is reserved for Slice 15; until then it
+        // gracefully degrades to kOff so the viewport is never blank.
+        if (mode == HeatmapMode::kPredictionField) {
+            mode = HeatmapMode::kOff;
+        }
+    }
+    data->heatmap_mode = mode;
+
+    if (mode == HeatmapMode::kCenterWeights) {
+        const ::rbfmax::MatrixX& W = node->weights();
+        const std::size_t n = data->center_positions.size();
+
+        const bool cache_valid =
+               (data->last_weights_ptr  == static_cast<const void*>(W.data()))
+            && (data->last_weights_rows == W.rows())
+            && (data->last_weights_cols == W.cols())
+            && (data->last_cached_mode  == HeatmapMode::kCenterWeights)
+            && (data->center_colors.size() == n);
+
+        if (!cache_valid) {
+            data->center_colors.resize(n);
+            if (n > 0) {
+                compute_center_colors(W, data->center_colors.data(), n);
+            }
+            data->last_weights_ptr  = static_cast<const void*>(W.data());
+            data->last_weights_rows = W.rows();
+            data->last_weights_cols = W.cols();
+            data->last_cached_mode  = HeatmapMode::kCenterWeights;
+        }
+    }
+    // For kOff we leave center_colors / cache fields untouched — the
+    // next switch back to kCenterWeights will see a stale cache key
+    // (mode mismatch) and recompute, which is correct.
+
     return data;
 }
 
@@ -132,13 +173,30 @@ void mRBFDrawOverride::addUIDrawables(
     }
 
     drawManager.beginDrawable();
-    drawManager.setColor(d->color_centers);
     drawManager.setDepthPriority(5);
-    for (const MPoint& p : d->center_positions) {
-        drawManager.sphere(p,
-                           static_cast<double>(d->sphere_radius),
-                           /*filled=*/true);
+
+    if (d->heatmap_mode == HeatmapMode::kCenterWeights
+        && d->center_colors.size() == d->center_positions.size()) {
+        // Slice 14 HM-1 — per-center colored spheres.  setColor must be
+        // called inside the begin/end block per Maya 2022/2025 docs;
+        // calling it before each sphere() is the documented idiom.
+        for (std::size_t i = 0; i < d->center_positions.size(); ++i) {
+            const auto& c = d->center_colors[i];
+            drawManager.setColor(MColor(c[0], c[1], c[2], c[3]));
+            drawManager.sphere(d->center_positions[i],
+                               static_cast<double>(d->sphere_radius),
+                               /*filled=*/true);
+        }
+    } else {
+        // Slice 13 default (kOff) — single white color, one batch.
+        drawManager.setColor(d->color_centers);
+        for (const MPoint& p : d->center_positions) {
+            drawManager.sphere(p,
+                               static_cast<double>(d->sphere_radius),
+                               /*filled=*/true);
+        }
     }
+
     drawManager.endDrawable();
 }
 

@@ -38,6 +38,8 @@
 #include <maya/MString.h>
 #include <maya/MTypeId.h>
 
+#include <rbfmax/types.hpp>      // Slice 14 — MatrixX for weights()
+
 // Phase 1 forward declaration — avoids pulling Eigen into this header.
 namespace rbfmax {
 class RBFInterpolator;
@@ -95,6 +97,15 @@ public:
     // !is_loaded().  Always a fresh copy — safe to call from the
     // draw thread.
     std::vector<MPoint> centers_for_viewport() const;
+
+    // Slice 14 (HM-1) — direct read access to the interpolator's
+    // weights matrix (N × M).  Returns a default-constructed 0×0
+    // matrix when !is_loaded().  Caller must NOT mutate.  The
+    // returned reference is invalidated on the next try_load() that
+    // resets interp_; the DrawOverride never holds the reference
+    // across frames (it copies the buffer pointer + shape into
+    // RbfDrawData's cache key only).
+    const ::rbfmax::MatrixX& weights() const noexcept;
 
 private:
     // Owning pointer: RBFInterpolator is move-only (Phase 1 contract).

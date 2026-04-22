@@ -44,6 +44,7 @@ if(RBF_BUILD_MAYA_NODE)
         src/rbfmax_train_cmd.cpp     # Slice 12 — rbfmaxTrainAndSave MPxCommand
         src/mrbf_shape.cpp           # Slice 13 — Path B locator host
         src/mrbf_draw_override.cpp   # Slice 13 — Viewport 2.0 draw override
+        src/color_mapping.cpp        # Slice 14 — viridis + per-center colors
     )
 
     target_include_directories(rbfmax_maya_node PRIVATE

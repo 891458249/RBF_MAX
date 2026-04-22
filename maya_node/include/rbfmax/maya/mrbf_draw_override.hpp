@@ -27,7 +27,10 @@
 // =============================================================================
 #pragma once
 
+#include <array>
 #include <vector>
+
+#include <Eigen/Core>                       // Eigen::Index for cache key
 
 #include <maya/MBoundingBox.h>
 #include <maya/MColor.h>
@@ -38,6 +41,8 @@
 #include <maya/MPxDrawOverride.h>
 #include <maya/MUIDrawManager.h>
 #include <maya/MUserData.h>
+
+#include "rbfmax/maya/color_mapping.hpp"   // Slice 14 — HeatmapMode
 
 namespace rbfmax {
 namespace maya {
@@ -66,8 +71,23 @@ public:
 
     bool                is_loaded      = false;
     std::vector<MPoint> center_positions;
-    MColor              color_centers  = MColor(1.0f, 1.0f, 1.0f);
+    MColor              color_centers  = MColor(1.0f, 1.0f, 1.0f);  // kOff
     float               sphere_radius  = 0.05f;
+
+    // Slice 14 — per-center colors (used when heatmap_mode != kOff).
+    // Size invariant when populated: matches center_positions.size().
+    std::vector<std::array<float, 4>> center_colors;
+    HeatmapMode         heatmap_mode   = HeatmapMode::kOff;
+
+    // Cache key for skipping redundant compute_center_colors() work.
+    // We compare the underlying weights buffer pointer + shape; if all
+    // three match the prior frame and the mode is unchanged, the cached
+    // center_colors are reused as-is.  This pointer is observed only,
+    // never dereferenced after the comparison.
+    const void*   last_weights_ptr  = nullptr;
+    Eigen::Index  last_weights_rows = 0;
+    Eigen::Index  last_weights_cols = 0;
+    HeatmapMode   last_cached_mode  = HeatmapMode::kOff;
 };
 
 class mRBFDrawOverride : public MHWRender::MPxDrawOverride {
