@@ -19,8 +19,10 @@ include(GoogleTest)
 add_executable(test_adapter_core
     test_adapter_core.cpp
     test_draw_sink.cpp                                          # Slice 13
+    test_color_mapping.cpp                                      # Slice 14
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/adapter_core_csv.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../src/draw_sink_core.cpp)      # Slice 13
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/draw_sink_core.cpp       # Slice 13
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/color_mapping.cpp)       # Slice 14
 
 target_link_libraries(test_adapter_core PRIVATE
     rbfmax::kernel
