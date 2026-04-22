@@ -24,6 +24,8 @@ import os
 import shutil
 import sys
 import traceback
+import gc
+import time
 
 try:
     import maya.cmds as cmds
@@ -184,20 +186,77 @@ def _write_module_file(module_root, version):
     _log("wrote module file: " + mod_path)
 
 
+def _safe_rmtree(path, retries=5, delay=0.2):
+    """Windows 下 .mll 句柄可能延迟释放；rmtree 加 retry。
+    成功返回 None；全部失败返回最后捕获的异常（不抛）。"""
+    if not os.path.isdir(path):
+        return None
+    last_err = None
+    for _ in range(retries):
+        try:
+            shutil.rmtree(path)
+            return None
+        except (PermissionError, OSError) as e:
+            last_err = e
+            time.sleep(delay)
+    return last_err
+
+
+def _force_overwrite_tree(src, dst):
+    """文件级覆盖；失败的单文件记录但不中断。返回失败列表。"""
+    failures = []
+    for root, dirs, files in os.walk(src):
+        rel = os.path.relpath(root, src)
+        dst_root = os.path.join(dst, rel) if rel != '.' else dst
+        if not os.path.isdir(dst_root):
+            try:
+                os.makedirs(dst_root)
+            except Exception:  # noqa: BLE001
+                pass
+        for f in files:
+            src_f = os.path.join(root, f)
+            dst_f = os.path.join(dst_root, f)
+            try:
+                if os.path.isfile(dst_f):
+                    os.remove(dst_f)
+                shutil.copy2(src_f, dst_f)
+            except Exception as e:  # noqa: BLE001
+                failures.append((dst_f, str(e)))
+    return failures
+
+
 def _copy_payload(module_root):
-    """把 installer 目录里的 plug-ins/ 和 scripts/ 复制到 module_root。"""
+    """把 installer 目录里的 plug-ins/ 和 scripts/ 复制到 module_root。
+
+    Windows 注意: 若 dst 中的 .mll 当前被 Maya 持有锁，rmtree 会失败。
+    此时退化为文件级覆盖（_force_overwrite_tree）：单个 .mll 写不进去
+    时记录而不中断，让 _install 继续完成 .mod 写入；下次启动 Maya
+    autoload 仍然生效。"""
     src_root = _installer_dir()
     for sub in (_REL_PLUGIN_DIR, "scripts"):
         src = os.path.join(src_root, sub)
         dst = os.path.join(module_root, sub)
         if os.path.isdir(dst):
-            shutil.rmtree(dst)
+            err = _safe_rmtree(dst)
+            if err is not None:
+                _log("rmtree failed ({0}); falling back to file-level "
+                     "overwrite".format(err))
+                if os.path.isdir(src):
+                    failures = _force_overwrite_tree(src, dst)
+                    if failures:
+                        _log("file-level overwrite had {0} failure(s); "
+                             "first: {1}".format(len(failures), failures[0]))
+                    else:
+                        _log("file-level overwrite ok: {0} -> {1}".format(
+                            src, dst))
+                continue
         if os.path.isdir(src):
             shutil.copytree(src, dst)
             _log("copied {s} -> {d}".format(s=src, d=dst))
         else:
             # scripts 可能不存在，跳过
-            os.makedirs(dst)
+            if not os.path.isdir(dst):
+                os.makedirs(dst)
 
 
 def _install():
@@ -301,6 +360,10 @@ def _uninstall_core(quiet=False):
                 cmds.flushUndo()
                 cmds.unloadPlugin(PLUGIN_NAME)
                 _log("unloaded plugin " + PLUGIN_NAME)
+                # Windows: give FreeLibrary a moment to actually release
+                # the DLL so the subsequent rmtree is not blocked.
+                gc.collect()
+                time.sleep(0.5)
         except Exception as e:  # noqa: BLE001
             errors.append("unloadPlugin: " + str(e))
         try:
@@ -317,14 +380,22 @@ def _uninstall_core(quiet=False):
         except Exception as e:  # noqa: BLE001
             errors.append("remove mod: " + str(e))
 
-    # 3) 删模块根目录
+    # 3) 删模块根目录（Windows 下 .mll 可能仍被 Maya 持有锁）
     module_root = _module_target_root()
     if os.path.isdir(module_root):
-        try:
-            shutil.rmtree(module_root)
+        err = _safe_rmtree(module_root)
+        if err is None:
             _log("removed module dir: " + module_root)
-        except Exception as e:  # noqa: BLE001
-            errors.append("remove module dir: " + str(e))
+        else:
+            # 部分残留 — 列出残留文件方便用户判断
+            remaining = []
+            for r, d, fs in os.walk(module_root):
+                for f in fs:
+                    remaining.append(os.path.join(r, f))
+            errors.append(
+                "module dir partially removed ({0} files remain, "
+                "likely .mll locked by Maya; restart Maya to clean): "
+                "{1}".format(len(remaining), module_root))
 
     if errors and not quiet:
         _message(
@@ -338,11 +409,22 @@ def _uninstall():
             or os.path.isdir(_module_target_root())):
         _message("未检测到已安装的 RBF_MAX。", icon="information")
         return
-    _uninstall_core(quiet=False)
-    _message(
-        "✅ RBF_MAX 已完全卸载。\n\n"
-        "被删除:\n  模块描述  {mod}\n  模块目录  {dir}".format(
-            mod=_module_file_path(), dir=_module_target_root()))
+    # quiet=True so we own the dialog flow and can distinguish clean
+    # vs partial outcomes by inspecting the returned errors list.
+    errors = _uninstall_core(quiet=True)
+    if not errors:
+        _message(
+            "✅ RBF_MAX 已完全卸载。\n\n"
+            "被删除:\n  模块描述  {mod}\n  模块目录  {dir}".format(
+                mod=_module_file_path(), dir=_module_target_root()))
+    else:
+        msg = (
+            "⚠️ 卸载部分完成\n\n"
+            "以下问题需要重启 Maya 后手动清理:\n\n"
+            + "\n".join("  • " + e for e in errors)
+            + "\n\nautoload 已关闭，下次启动 Maya 不会再加载该插件。\n"
+            "重启 Maya 后可再次运行本 installer 的卸载来清残留。")
+        _message(msg, icon="warning")
 
 
 # -----------------------------------------------------------------------------
