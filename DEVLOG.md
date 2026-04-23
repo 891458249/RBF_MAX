@@ -14,6 +14,141 @@
 
 ---
 
+## 2026-04-24 · Slice 16 — Phase 2B close-out + v1.2.0
+
+**Scope**: Pure retrospective + version bump. Zero functional code changes; zero test changes; zero installer changes. `project(rbfmax VERSION …)` 1.1.0 → 1.2.0, `RBFMAX_MAYA_PLUGIN_VERSION` likewise; new `[1.2.0]` CHANGELOG entry; this DEVLOG entry consolidates Phase 2B.
+
+### Phase 2B scope summary
+
+Phase 2B opened with Slice 13 (Path B recovery from a failed architectural attempt) and closes here with v1.2.0. Five PRs merged to `main`:
+
+| PR | Slice | Date | Summary |
+|----|-------|------|---------|
+| #11 | Slice 13 | 2026-04-22 | mRBFShape + mRBFDrawOverride (Path B). Zero-touch of mRBFNode; classification `drawdb/geometry/rbfmax/mRBFShape` |
+| #12 | Installer | 2026-04-22 | Drag-drop installer with Maya Module System (two follow-up commits for Windows HOME env and .mll file lock, both merged back onto this PR) |
+| #13 | Slice 14 | 2026-04-22 | HM-1 per-center viridis coloring |
+| #14 | Slice 15 | 2026-04-23 | HM-2 prediction-field grid + X-Ray (XR-1) |
+| #? | Slice 16 | 2026-04-24 | This PR — retrospective + v1.2.0 |
+
+Installer binary sync (Slice 13 snapshot → Slice 15 build) happened in a non-PR session action (`package.py` + mayapy-triggered reinstall, `.mll` is gitignored). The installer deploy state is now consistent with main HEAD.
+
+### Quantitative summary
+
+Based on `git diff --stat origin/main..<slice-tip>` at each slice merge point:
+
+| Slice | PR | Files changed | LOC added | LOC removed | Net |
+|-------|----|---------------|-----------|-------------|-----|
+| 13    | #11 | 16 | 1214 | 14 | +1200 |
+| 14    | #13 | 17 |  659 |  7 |  +652 |
+| 15    | #14 | 12 |  676 | 12 |  +664 |
+| Installer + 2 follow-ups | #12 | 6 (+2 follow-ups) | ~1050 | ~30 | +~1020 |
+| **Phase 2B total (excluding this slice)** | | **~51 unique files** | **~3600** | **~63** | **+~3540** |
+
+Test count trajectory:
+- Slice 13 opened: Phase 1 138 + adapter (H3+C6+D8+E8) = 163
+- Slice 14: +1 Phase 1 (D-group `WeightsGetterReflectsFit`) + 8 F-group = 172
+- Slice 15: +8 G-group = 180
+- **Phase 2B close**: adapter + Phase 1 = **180 tests** (vs 163 at open). 0 regressions.
+
+F-stop register trajectory:
+- #1-4: Phase 2A (documented in earlier slices)
+- #5 (Slice 14): viridis polynomial → LUT pivot
+- #6 (Slice 15): Windows .mll file lock during rebuild
+- #7 (Installer PR #12 follow-up #1): Windows `HOME` env var double-Documents path
+- #8 (Installer PR #12 follow-up #2): Windows `.mll` unload + reinstall file lock
+- #9 (This session, installer sync): installer binary lag (Slice 13 snapshot vs Slice 15 build) — not a code bug; resolved by `package.py` + reinstall
+
+All **#5-#9 resolved** at Phase 2B close. None rolled into Phase 2C.
+
+### Invariant tracking — Phase 2B discipline
+
+| Invariant | Enforced across | Status |
+|-----------|-----------------|--------|
+| Phase 1 kernel / solver / interpolator **behavioral** code — zero touch | Slices 13 / 14 / 15 / 16 | ✅ `build` ctest 139/139 every slice; only `centers()` (Slice 13) + `weights()` (Slice 14) additive const getters added |
+| Slice 10A / 11 / 12 `mRBFNode::compute()` / `try_load()` / attribute set — zero touch | Slices 13 / 14 / 15 / 16 | ✅ Five additive public getters total: `is_loaded()` + `centers_for_viewport()` (Slice 13) + `weights()` (Slice 14) + `input_dim()` + `predict_batch_samples()` (Slice 15). All const, never enter the DG |
+| Slice 13 `mRBFDrawOverride::supportedDrawAPIs` / `boundingBox` / `isBounded` / classification — zero touch | Slices 14 / 15 / 16 | ✅ Only `prepareForDraw` + `addUIDrawables` implementation logic extended per explicit allowance |
+| Slice 13 `mRBFShape` pre-existing attrs — zero touch | Slices 14 / 15 / 16 | ✅ `aSourceNode` / `aDrawEnabled` / `aSphereRadius` never modified; new attrs (`aHeatmapMode` Slice 14; `aGridResolution` / `aGridExtent` / `aGridZ` / `aXRayMode` Slice 15) only appended |
+| **R-44** — `mRBFShape` zero `MFnTypedAttribute(MFnData::kString)` | All Phase 2B slices | ✅ Enum + bool + double + int + message only. Locked after Slice 13 Path A failure |
+| Slice 14 `map_scalar_to_color` / `compute_center_colors` LUT — zero touch | Slice 15 / 16 | ✅ Slice 15 only added `build_grid_sample_points` + `compute_grid_colors` alongside |
+
+### Tech-debt status table
+
+| ID | Origin | Description | Phase 2B status |
+|----|--------|-------------|-----------------|
+| T-10 | Slice 10A | Development-range typeId `0x00013A00`; must request Autodesk permanent block before distribution | **ROLLED to Phase 2C** (pre-distribution block) |
+| T-16 | Slice 13 | Manual `connectAttr mRBFNode.message mRBFShape.sourceNode` — convenience command `rbfmaxAttachShape` candidate | **ROLLED to Phase 2C** (Qt UI + command scope) |
+| T-17 | Slice 14 | `centers_for_viewport()` returns positions only; HM-1 needs per-center colors path | ✅ **Resolved Slice 14** — separate `compute_center_colors` + `center_colors` vector in `RbfDrawData`; `T-17 closed` |
+| T-18 | Slice 14 | DrawOverride uses fixed `(-10, +10)` bbox | **ROLLED to Phase 2C** (tighten once scene-bbox integration lands) |
+| T-19 | Slice 14 | Per-frame min/max normalization for HM-1 makes color spread context-dependent | **ROLLED** (alternatives like log / percentile clipping deferred to Phase 2C UX pass) |
+| T-20 | Slice 14 | LUT precision only 1e-2 at three anchors; intermediate v values may drift ~0.05 vs matplotlib viridis | **ROLLED** (visual review of HM-1 + HM-2 in production rigs will determine if tighter LUT justified) |
+| R-44 | Slice 13 | `MPxLocatorNode` + `MFnTypedAttribute(kString)` triggers Maya `registerNode kFailure` — root cause unresolved | **PERMANENT empirical constraint** — treated as invariant on mRBFShape going forward; no Phase 2C work planned |
+| R-45 | Slice 14 | `HeatmapMode::kPredictionField` fallback to kOff | ✅ **Resolved Slice 15** — HM-2 activated; fallback removed |
+| **F-stop #6 mitigation candidate** | Slice 15 | Hot-loading `.mll` from build dir locks file → blocks subsequent CMake link | **ROLLED to Phase 2C** as `scripts/dev_unload.py` keybind helper |
+
+**Phase 2C roll-over items (6 total)**: T-10, T-16, T-18, T-19, T-20, plus the dev_unload.py helper.
+
+### Phase 2B reviewer discipline — summary
+
+- **Rule 3 "Maya docs unverified"**: triggered F-stop #5 (polynomial viridis reference in spec did not match matplotlib); triggered A2 pre-flight discovery in Slice 15 that `MUIDrawManager` has no `DepthPriority` enum → raw-integer fallback (5 / 10) locked with comments.
+- **Rule 4 "systematic assumption elimination"**: executed in force during Slice 13 Path A (4+ hours ruling out classification / MString / devkit / registration order / Maya version / output-string attrs / inheritance / stale artifacts before Path B retreat); also in Installer PR #12 follow-up #1 (Windows `HOME` env var hunt).
+- **Rule 5 formalized** (new, from Slice 13): "For any Maya API feature first attempted in Phase 2, identify the canonical Autodesk sample pattern. When a spec deviates from that pattern, flag the deviation as pre-dispatch risk and prefer the less-ambitious scope matching the sample exactly." Slice 13 Path B (separate `mRBFShape`) matches the `cvColor` / `footPrint` sample pattern; Slice 14 / 15 inherited that correctness.
+
+### Phase 2C entry conditions
+
+Phase 2C will build on the viewport + installer foundation. Four **specific deliverables** blocked until Phase 2B v1.2.0 ships:
+
+1. **Qt UI panel** — shelf button + property editor extension for `mRBFShape`; visualizes grid + heatmap mode picker + reload trigger without channel-box hunting.
+2. **Menu bar integration** — `initializePlugin` populates a top-level `RBFMax` menu (Slice 13 explicitly scoped this out; Phase 2C activates via `installer/scripts/` via the pre-reserved directory).
+3. **`rbfmaxAttachShape` command** (T-16) — one-shot command to create mRBFShape + connectAttr, given a mRBFNode. Shipped as MPxCommand registered by the plugin.
+4. **`scripts/dev_unload.py`** helper (F-stop #6 mitigation) — Maya userSetup keybind that wraps `cmds.unloadPlugin('rbfmax_maya')` + scene cleanup; for developers iterating on the build tree.
+
+None of the four require Phase 1 changes or further `mRBFNode` / `mRBFShape` attribute additions beyond polish.
+
+### Validation (Slice 16-specific)
+
+- `build/` (Phase 1 pure, no Maya): clean reconfigure + build + ctest → **139/139 PASS** after `project() VERSION 1.1.0 → 1.2.0`.
+- `build-adapter/`: incremental build + ctest → **180/180 PASS** (unchanged from Slice 15; confirms the test count invariant held across version bump).
+- Maya 2022 plugin (`build-maya-2022/` clean reconfigure): **0 warn / 0 err**.
+- Maya 2025 plugin (`build-maya-2025/` clean reconfigure): **0 warn / 0 err**.
+- Maya 2022 × 4 smokes (hellonode / predict / train / viewport): all PASS.
+- Maya 2025 × 4 smokes: all PASS.
+- **Version injection assertion** (new, Slice 16 unique step):
+  ```
+  mayapy -c "cmds.loadPlugin(...); assert cmds.pluginInfo(..., version=True) == '1.2.0'"
+  ```
+  Passed on both Maya 2022 and Maya 2025 — confirms `configure_file` → `plugin_info.hpp` → `MFnPlugin::registerNode` version-string path still wires correctly after the CMake bump.
+
+### `.mll` byte sizes (v1.2.0, reference only)
+
+- Maya 2022: **528,384 bytes** (unchanged from Slice 15 — `"1.2.0"` and `"1.1.0"` are both 5 chars, no section re-alignment)
+- Maya 2025: **529,408 bytes** (likewise unchanged)
+
+Confirms no accidental code drift between v1.1.0 and v1.2.0 on `main` — the only runtime difference is the version string baked into the DLL.
+
+### Tag push (out of this PR's scope)
+
+Deferred until after merge:
+
+```bash
+git tag -a v1.1.0 d624c79 -m "Phase 2A close-out — Slice 12 baseline"
+git tag -a v1.2.0 <slice-16-merge-commit> -m "Phase 2B close-out — HM-1 + HM-2 + X-Ray + installer"
+git push origin v1.1.0 v1.2.0
+```
+
+`v1.1.0` is a retro tag on Slice 12's `d624c79` (the CMake bump commit), per Slice 12 DEVLOG's "tag deferred to Phase 2B end" note — that promise is now fulfilled.
+
+### File changes summary
+
+Modified:
+- `CMakeLists.txt` — project VERSION 1.1.0 → 1.2.0 (single-line diff)
+- `maya_node/CMakeLists.txt` — `RBFMAX_MAYA_PLUGIN_VERSION` 1.1.0 → 1.2.0 (single-line diff)
+- `CHANGELOG.md` — new `[1.2.0]` section
+- `DEVLOG.md` — this Slice 16 entry
+
+Zero touches on any Maya / kernel source, any test, any installer file, any smoke script.
+
+---
+
 ## 2026-04-22 · Slice 15 — Heatmap HM-2 (prediction field) + X-Ray (XR-1)
 
 **Scope**: Phase 2B third slice. Activates `HeatmapMode::kPredictionField` (the field reserved in Slice 14 with a fallback to `kOff`) by sampling the trained interpolator on a 2D grid in local space and rendering each sample as a small viridis-colored sphere. Adds `xrayMode` so the locator's centers + grid render on top of scene geometry. No version bump.

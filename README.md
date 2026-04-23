@@ -4,7 +4,7 @@ Industrial-grade Radial Basis Function interpolation kernel for
 Autodesk Maya and game engines.
 
 [![CI](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml/badge.svg)](https://github.com/891458249/RBF_MAX/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](https://github.com/891458249/RBF_MAX/releases/tag/v1.1.0)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](https://github.com/891458249/RBF_MAX/releases/tag/v1.2.0)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-11-orange)](https://en.cppreference.com/w/cpp/11)
 
