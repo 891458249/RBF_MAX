@@ -55,5 +55,52 @@ void compute_center_colors(
     std::array<float, 4>*     out_colors,
     std::size_t               n_centers) noexcept;
 
+// -----------------------------------------------------------------------------
+// Slice 15 — HM-2 grid sampling utilities
+// -----------------------------------------------------------------------------
+
+// Build a flat matrix of G^2 sample points in local space for grid-based
+// prediction-field visualization.  Points cover [-extent, +extent] x
+// [-extent, +extent] on the XY plane with Z = grid_z.
+//
+// Dimension filling rule for `input_dim`:
+//   D == 0: returns empty matrix (no meaningful sampling)
+//   D == 1: out has G^2 rows x 1 col, only gx (gy, grid_z discarded)
+//   D == 2: out has G^2 rows x 2 cols, (gx, gy)
+//   D == 3: out has G^2 rows x 3 cols, (gx, gy, grid_z)
+//   D >= 4: out has G^2 rows x D cols, (gx, gy, grid_z, 0, 0, ...)
+//
+// Out-of-range params handled defensively:
+//   grid_resolution < 2 -> returns empty matrix
+//   grid_resolution > 256 -> capped at 256 (sanity limit, 64K points)
+//   grid_extent <= 0 -> returns empty matrix
+//
+// Maya-free; covered by G-group tests.
+void build_grid_sample_points(
+    int               grid_resolution,
+    double            grid_extent,
+    double            grid_z,
+    Eigen::Index      input_dim,
+    MatrixX&          out_samples) noexcept;
+
+// Convert batch prediction results into per-point RGBA viridis colors.
+//   predictions: (G^2 x M) matrix from RBFInterpolator::predict_batch
+//   out_colors:  caller-allocated buffer of at least grid_count elements
+//   grid_count:  must equal predictions.rows(); excess tolerated
+//
+// Algorithm (mirrors compute_center_colors):
+//   heat[i] = predictions.row(i).norm()
+//   v01[i]  = (heat[i] - min_h) / (max_h - min_h + 1e-12)
+//   out[i]  = map_scalar_to_color(v01[i])
+//
+// Degenerate handling:
+//   empty predictions     -> no writes
+//   all predictions equal -> all colors = map_scalar_to_color(0)
+//   any NaN / Inf in row  -> that single row writes (1, 1, 1, 1)
+void compute_grid_colors(
+    const MatrixX&            predictions,
+    std::array<float, 4>*     out_colors,
+    std::size_t               grid_count) noexcept;
+
 }  // namespace maya
 }  // namespace rbfmax

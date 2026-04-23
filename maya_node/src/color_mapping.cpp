@@ -150,5 +150,106 @@ void compute_center_colors(
     }
 }
 
+// -----------------------------------------------------------------------------
+// Slice 15 — build_grid_sample_points
+// -----------------------------------------------------------------------------
+
+void build_grid_sample_points(
+    int               grid_resolution,
+    double            grid_extent,
+    double            grid_z,
+    Eigen::Index      input_dim,
+    MatrixX&          out_samples) noexcept {
+    // Edge-case guards: any invalid input yields an empty matrix so callers
+    // never end up with a partially populated buffer.
+    if (grid_resolution < 2 || grid_extent <= 0.0 || input_dim <= 0) {
+        out_samples.resize(0, 0);
+        return;
+    }
+    // Sanity cap — 256 x 256 = 65,536 points; beyond that predict_batch
+    // becomes the bottleneck and visual benefit per point shrinks.
+    const int G = std::min(grid_resolution, 256);
+    const Eigen::Index total = static_cast<Eigen::Index>(G)
+                             * static_cast<Eigen::Index>(G);
+
+    out_samples.resize(total, input_dim);
+    out_samples.setZero();  // ensures D >= 4 cols are zero-filled
+
+    const double step = (G > 1)
+        ? (2.0 * grid_extent / static_cast<double>(G - 1))
+        : 0.0;
+
+    for (int iy = 0; iy < G; ++iy) {
+        const double gy = -grid_extent + static_cast<double>(iy) * step;
+        for (int ix = 0; ix < G; ++ix) {
+            const double gx = -grid_extent + static_cast<double>(ix) * step;
+            const Eigen::Index row = static_cast<Eigen::Index>(iy)
+                                   * static_cast<Eigen::Index>(G)
+                                   + static_cast<Eigen::Index>(ix);
+            if (input_dim >= 1) out_samples(row, 0) = static_cast<Scalar>(gx);
+            if (input_dim >= 2) out_samples(row, 1) = static_cast<Scalar>(gy);
+            if (input_dim >= 3) out_samples(row, 2) = static_cast<Scalar>(grid_z);
+            // D >= 4: remaining cols already zero from setZero()
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Slice 15 — compute_grid_colors (mirrors compute_center_colors)
+// -----------------------------------------------------------------------------
+
+void compute_grid_colors(
+    const MatrixX&            predictions,
+    std::array<float, 4>*     out_colors,
+    std::size_t               grid_count) noexcept {
+    if (out_colors == nullptr || grid_count == 0) {
+        return;
+    }
+    const Eigen::Index rows = predictions.rows();
+    const Eigen::Index usable = std::min(
+        static_cast<Eigen::Index>(grid_count), rows);
+    if (usable == 0) {
+        return;
+    }
+
+    std::vector<Scalar> heat(static_cast<std::size_t>(usable));
+    std::vector<bool>   bad(static_cast<std::size_t>(usable), false);
+    for (Eigen::Index i = 0; i < usable; ++i) {
+        const Scalar h = predictions.row(i).norm();
+        if (!std::isfinite(h)) {
+            bad[static_cast<std::size_t>(i)]  = true;
+            heat[static_cast<std::size_t>(i)] = Scalar(0);
+        } else {
+            heat[static_cast<std::size_t>(i)] = h;
+        }
+    }
+
+    Scalar min_h =  std::numeric_limits<Scalar>::infinity();
+    Scalar max_h = -std::numeric_limits<Scalar>::infinity();
+    bool   have_any = false;
+    for (Eigen::Index i = 0; i < usable; ++i) {
+        if (bad[static_cast<std::size_t>(i)]) continue;
+        const Scalar h = heat[static_cast<std::size_t>(i)];
+        min_h = std::min(min_h, h);
+        max_h = std::max(max_h, h);
+        have_any = true;
+    }
+
+    const Scalar range = have_any ? (max_h - min_h) : Scalar(0);
+    const Scalar eps   = Scalar(1e-12);
+
+    for (Eigen::Index i = 0; i < usable; ++i) {
+        const std::size_t si = static_cast<std::size_t>(i);
+        if (bad[si]) {
+            out_colors[si] = {1.0f, 1.0f, 1.0f, 1.0f};
+            continue;
+        }
+        const Scalar v01 = (range > eps)
+            ? (heat[si] - min_h) / (range + eps)
+            : Scalar(0);
+        out_colors[si] = map_scalar_to_color(v01);
+    }
+}
+
 }  // namespace maya
 }  // namespace rbfmax

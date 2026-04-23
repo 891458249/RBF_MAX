@@ -490,5 +490,24 @@ const ::rbfmax::MatrixX& mRBFNode::weights() const noexcept {
     return interp_->weights();
 }
 
+// Slice 15 (HM-2) — additive helpers for the prediction-field heatmap.
+// Both wrap Phase 1 accessors with an is_loaded() guard so the
+// DrawOverride can call them unconditionally.
+
+Eigen::Index mRBFNode::input_dim() const noexcept {
+    if (!interp_) {
+        return 0;
+    }
+    return static_cast<Eigen::Index>(interp_->dim());
+}
+
+::rbfmax::MatrixX mRBFNode::predict_batch_samples(
+        const ::rbfmax::MatrixX& samples) const {
+    if (!interp_ || samples.rows() == 0) {
+        return ::rbfmax::MatrixX();
+    }
+    return interp_->predict_batch(samples);
+}
+
 }  // namespace maya
 }  // namespace rbfmax
