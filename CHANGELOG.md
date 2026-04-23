@@ -14,6 +14,67 @@ _尚无未发布变更。_
 
 ---
 
+## [1.2.0] — 2026-04-24
+
+**Phase 2B complete — Viewport 2.0 visualization + drag-drop installer.**
+mRBFNode remains a pure `kDependNode` (Phase 2A contract untouched);
+visualization is carried by a new auxiliary locator `mRBFShape`
+connected via message attribute and hosting `mRBFDrawOverride`.
+Artists get per-center heatmap (HM-1), prediction-field heatmap
+(HM-2), and X-Ray rendering. A drag-drop Python installer ships
+the plugin + Maya module files to user preferences with zero-
+residue uninstall. Validated on Maya 2022 and Maya 2025.
+
+### Added
+- `mRBFShape` locator node (typeId `0x00013A01`) — hosts the
+  Viewport 2.0 draw override via `drawdb/geometry/rbfmax/mRBFShape`
+  classification. Connects to a `mRBFNode` via `sourceNode`
+  message attribute. Per-shape `drawEnabled` / `sphereRadius` /
+  `heatmapMode` / `gridResolution` / `gridExtent` / `gridZ` /
+  `xrayMode` attributes (Slice 13 / 14 / 15).
+- `mRBFDrawOverride` — renders trained centers as filled spheres in
+  Viewport 2.0. Three rendering stages: kOff (white), kCenterWeights
+  (per-center viridis from L2 weight norm — HM-1), kPredictionField
+  (G² sample grid colored by `predict_batch` output norm — HM-2).
+  X-Ray depth priority (5 / 10) toggles whether the overlay
+  renders on top of scene geometry.
+- **Drag-drop installer** (`installer/drag_drop_install.py`) — Maya
+  artists install/uninstall the plugin by dragging a single Python
+  file onto the Maya viewport. Uses Maya Module System (`.mod` file
+  + per-version plug-in subdirs under `~/Documents/maya/modules/`).
+  Zero-residue uninstall. Supports Maya 2022 + 2025.
+- **Phase 1 additive getters** (const noexcept): `RBFInterpolator::
+  centers()` (Slice 13) and `::weights()` (Slice 14) expose fit
+  state to viewport consumers without re-parsing saved JSON.
+
+### Fixed
+- Installer path resolution used `os.path.expanduser('~')` which on
+  Windows honors the `HOME` env var (set by Git Bash / MSYS / Cygwin /
+  WSL to `Documents`), producing `%USERPROFILE%/Documents/Documents/
+  maya/modules/` paths Maya never scans. Switched to
+  `cmds.internalVar(userAppDir=True)` inside Maya and `USERPROFILE`
+  as fallback.
+- Installer uninstall on Windows now handles `.mll` file locks via
+  `_safe_rmtree` retry loop and `_force_overwrite_tree` file-level
+  fallback. Uninstall dialog distinguishes clean removal vs partial
+  (Maya restart needed).
+
+### Architectural notes
+- **Phase 2A contract preserved**: `mRBFNode` stays a pure
+  `kDependNode` with `compute()` / `try_load()` unchanged since
+  Slice 10A-12. Five additive public getters (all const,
+  noexcept where applicable) bridge the viewport layer.
+- **Cross-version `.mll` bit-identity** retired in Slice 13 — the
+  `OpenMayaRender` + `OpenMayaUI` link libs diverged across the
+  2022 / 2025 devkits, so byte-wise equality across versions is
+  no longer a maintained invariant (only symbolic / API equivalence).
+- **mRBFShape R-44 invariant**: zero `MFnTypedAttribute(MFnData::
+  kString)` on the locator. Empirical Slice 13 Path A failure
+  made this the permanent discipline; Slice 14 + 15 attribute
+  additions obeyed it (enum + bool + double + int only).
+
+---
+
 ## [1.1.0] — 2026-04-21
 
 **Phase 2A complete — Maya node integration + training command.**
