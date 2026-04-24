@@ -1,0 +1,51 @@
+{
+  "_comment_disclaimer": [
+    "NOT a cmt binary parity fixture.",
+    "Expected values computed by independent re-implementation per plan section C pseudocode.",
+    "True cmt binary parity is deferred to Slice 17B (T-30).",
+    "",
+    "Slice 17A audit trail: documents the 4-pose Full-mode test input used by",
+    "tests/test_feature_spec.cpp::HeteroFit_quat_only_FullMode_InterpolatesFixture.",
+    "Tests hard-code these doubles in C++ to avoid JSON-parse rounding; this file",
+    "serves as reviewer audit trail and as the payload Slice 17B's cmt binary parity",
+    "generator (scripts/gen_cmt_fixture.mel) will overwrite with real cmt output."
+  ],
+  "slice": "17A",
+  "group": "C",
+  "test": "quat_only_FullMode_InterpolatesFixture",
+  "spec": {
+    "scalar_dim": 0,
+    "quat_blocks": [
+      {"space": "Full", "axis": [0.0, 0.0, 0.0]}
+    ]
+  },
+  "N": 4,
+  "quat_feature_layout": "row = pose, cols = (x, y, z, w)",
+  "quat_features": [
+    [
+      [0.0, 0.0, 0.0, 1.0],
+      [0.0, 0.70710678118654757, 0.0, 0.70710678118654757],
+      [0.0, 1.0, 0.0, 0.0],
+      [0.0, 0.38268343236508978, 0.0, 0.92387953251128674]
+    ]
+  ],
+  "axis_angle_closed_forms": {
+    "pose_0": "identity (0 rad)",
+    "pose_1": "90 deg around +Y : (0, sin(pi/4), 0, cos(pi/4))",
+    "pose_2": "180 deg around +Y: (0, 1, 0, 0)",
+    "pose_3": "45 deg around +Y : (0, sin(pi/8), 0, cos(pi/8))"
+  },
+  "targets": [[0.1], [0.4], [0.9], [0.3]],
+  "fit_params": {
+    "kernel": {"type": "Gaussian", "eps": 1.0},
+    "poly_degree": -1,
+    "lambda": 1e-10
+  },
+  "expectations": {
+    "status": "OK",
+    "weights_shape_rows": 4,
+    "weights_shape_cols": 1,
+    "residual_norm_upper_bound": 1e-9,
+    "tolerance_note": "Algorithm-self-consistent tolerance <= 1e-12 per plan Decision 2; residual_norm bound here is the ridge-regression residual gate, not a direct value assertion."
+  }
+}
