@@ -49,7 +49,7 @@ VectorX out = rbf.predict(query);
 rbf.save("rig.rbf.json");
 ```
 
-> **For Maya end users**: see [`docs/install.md`](docs/install.md) for
+> **For Maya end users**: see [`docs/guides/install.md`](docs/guides/install.md) for
 > the drag-and-drop installer that packages the compiled plugin + a
 > Maya module file into your user preferences — no build step
 > required once the .mll has been packaged.
@@ -80,9 +80,9 @@ Eight independent modules composed into a single `RBFInterpolator`:
 └───────────────────────────────────────┘
 ```
 
-See [docs/math_derivation.md](docs/math_derivation.md) for the full
+See [docs/spec/math_derivation.md](docs/spec/math_derivation.md) for the full
 mathematical derivations (14 chapters) and
-[docs/schema_v1.md](docs/schema_v1.md) for the JSON schema spec.
+[docs/spec/schema_v1.md](docs/spec/schema_v1.md) for the JSON schema spec.
 
 ## Features
 

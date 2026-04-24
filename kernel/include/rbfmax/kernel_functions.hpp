@@ -134,7 +134,7 @@ inline Scalar quintic_derivative(Scalar r) noexcept {
 
 // --- Thin-plate spline:  φ(r) = r^2 ln(r),  with φ(0) := 0 -------------------
 //
-// Limit derivation (see docs/math_derivation.md):
+// Limit derivation (see docs/spec/math_derivation.md):
 //     lim_{r→0+} r^2 ln(r) = 0           (since r^2 dominates ln(r)).
 //     φ'(r) = r (2 ln(r) + 1);  lim_{r→0+} φ'(r) = 0.
 //

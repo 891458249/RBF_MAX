@@ -1,7 +1,7 @@
 // =============================================================================
 // kernel/src/io_json.cpp
 // -----------------------------------------------------------------------------
-// Implementation of rbfmax::io_json — see io_json.hpp + docs/schema_v1.md.
+// Implementation of rbfmax::io_json — see io_json.hpp + docs/spec/schema_v1.md.
 //
 // All file I/O and JSON traversal is wrapped in try/catch ⇒ outer noexcept
 // boundary preserved.  parse_v1_json builds into local temporaries and
