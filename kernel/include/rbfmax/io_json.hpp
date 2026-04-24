@@ -5,7 +5,7 @@
 // (InterpolatorOptions, FitResult) pair under a versioned schema so that
 // trained interpolators survive process restarts and cross-host transfer.
 //
-// Schema documentation: docs/schema_v1.md.
+// Schema documentation: docs/spec/schema_v1.md.
 //
 // Core contracts
 // --------------

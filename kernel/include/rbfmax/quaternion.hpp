@@ -21,7 +21,7 @@
 //      quaternion with w >= 0 because cos(|v|/2) >= 0 for |v|/2 ∈ [0, π/2].
 //   3. Taylor threshold — both log_map and exp_map switch to a Taylor
 //      branch when the magnitude of the small-angle term drops below
-//      1e-8. See docs/math_derivation.md §8.4 for the error analysis
+//      1e-8. See docs/spec/math_derivation.md §8.4 for the error analysis
 //      (truncation O(1e-32) ≪ ε_mach).
 //
 // All routines are header-only, noexcept, and never allocate.

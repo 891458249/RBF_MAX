@@ -30,7 +30,7 @@
 //     for zero-norm inputs upstream.
 //   * NaN components propagate (the acos/asin chain preserves NaN).
 //
-// Error bounds (see docs/math_derivation.md §6)
+// Error bounds (see docs/spec/math_derivation.md §6)
 // ---------------------------------------------
 //   * Regular acos branch       : |Δd| ≲ √ε_mach ≈ 1.5e-8 (relative).
 //   * asin half-angle fallback  : |Δd| ≲ 1e-7 near the identity — this is

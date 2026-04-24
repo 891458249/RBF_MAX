@@ -17,7 +17,7 @@
 //   3. kd-tree KNN acceleration only activates for KernelType::kGaussian
 //      (and only when n_centers >= options.kdtree_threshold and
 //      !options.force_dense).  Other kernels traverse all centers — see
-//      docs/math_derivation.md §14 for the truncation-error rationale.
+//      docs/spec/math_derivation.md §14 for the truncation-error rationale.
 //
 // Typical usage
 // -------------
