@@ -77,6 +77,13 @@ desktop.ini
 .remember/
 .claude/
 
+# Reference materials (research inputs, not project source):
+#   - 铁拳 8 CEDEC/GDC pptx+pdf — licensing unclear, kept local only
+#   - chadvernon cmt/jsRadial — upstream MIT source, reference-only
+#   - optimization-prompt docx — internal prompt engineering draft
+# Preserved in docs/源文档/ on dev machines; never shipped in repo.
+docs/源文档/
+
 # Installer payload (built .mll copied in by installer/package.py;
 # not checked in because they are large binary build products)
 installer/plug-ins/2022/*.mll
