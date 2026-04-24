@@ -175,6 +175,17 @@ Single F-stop during Step 3.4:
 
 **Next**: Slice 17B — wire `rotation::decompose_swing_twist` into the distance-matrix builder for the explicit `SolverSpace ∈ {Swing, Twist, SwingTwist}` tests against cmt binary fixture, **closing T-30**. The distance pipeline plumbing itself is already in place; 17B adds the fixture generator + `scripts/gen_cmt_fixture.mel` + checked-in JSON snapshots, and asserts rbfmax weights ≤ 1e-10 against cmt.
 
+### §G — PR #16 CI follow-up (same slice, separate commit)
+
+After the initial `f568728` push, Ubuntu / GCC 11 Release failed with 3 `-Werror` diagnostics MSVC does not flag:
+
+1. `-Werror=missing-declarations` × 2 on `make_quat_fixture_full_N4()` / `make_quat_fixture_swingtwist_N3()` — both file-scope functions in `rbfmax::` namespace without a prior declaration. Fix: wrapped both in an anonymous namespace (internal linkage, no declaration needed).
+2. `-Werror=unused-function` × 1 on `{anonymous}::vector_bytes_equal` — defined defensively but 17A's 14-field oracle has no `VectorX` byte-comparison need (`feature_norms` asserts `size()==0`; scalars go through `scalar_bit_equal`; matrices through `matrix_bytes_equal`). Fix: deleted with explanatory comment.
+
+**Lesson logged** (Rule 6 candidate): MSVC and GCC `-Werror` categories are asymmetric; future pre-dispatch audits must grep-verify file-scope test helpers for either `static`, `inline`, or `namespace {}` enclosure, **not rely on MSVC-only local build to approve portability**. Escalation to permanent `phase2_reviewer_discipline.md` Rule 6 pending one more instance (evidence threshold). Fix is test-only, zero kernel/maya-node touch, legacy `fit()` body still 0-delta.
+
+Local verification: `cmake --build build --config Release` clean + `ctest --test-dir build` = 159/159 PASS after fix; no regression.
+
 ---
 
 ## 2026-04-24 · Slice 16 — Phase 2B close-out + v1.2.0

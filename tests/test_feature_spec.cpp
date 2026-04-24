@@ -81,13 +81,10 @@ bool matrix_bytes_equal(const MatrixX& a, const MatrixX& b) {
     return std::memcmp(a.data(), b.data(), nbytes) == 0;
 }
 
-bool vector_bytes_equal(const VectorX& a, const VectorX& b) {
-    if (a.size() != b.size()) return false;
-    if (a.size() == 0) return true;
-    const std::size_t nbytes =
-        static_cast<std::size_t>(a.size()) * sizeof(Scalar);
-    return std::memcmp(a.data(), b.data(), nbytes) == 0;
-}
+// (vector_bytes_equal removed — 17A oracle has no VectorX field comparison:
+//  scalars → scalar_bit_equal; matrices → matrix_bytes_equal;
+//  feature_norms asserts size()==0, never needing byte compare.
+//  Deletion avoids GCC -Werror=unused-function on Ubuntu CI.)
 
 // Full 10-field byte-identical comparison of two FitResults on the pre-17A
 // surface only.  The 4 new tail fields are verified separately — see
@@ -405,7 +402,14 @@ TEST(Oracle17A, scalar_only_baseline_PreservesSolverPath) {
 //  will overwrite.
 //
 //  Quat storage convention in MatrixX: row = pose, columns = (x, y, z, w).
+//
+//  Wrapped in an anonymous namespace to keep internal linkage — these
+//  helpers are translation-unit-local and must not leak to `rbfmax::`
+//  (GCC -Werror=missing-declarations catches bare file-scope functions
+//  without a prior declaration; MSVC does not).
 // ---------------------------------------------------------------------------
+
+namespace {
 
 // Full-mode fixture: N=4, axis-angle closed-form unit quaternions.
 //   pose 0 : identity         → (0, 0, 0, 1)
@@ -440,6 +444,8 @@ MatrixX make_quat_fixture_swingtwist_N3() {
          s30, 0.0, 0.0, c30;   // 30° about X (swing-dominant for axis=Y)
     return Q;
 }
+
+}  // namespace
 
 // ============================================================================
 //  Group C — quat-only mixed spaces (Slice 17A step 3.4)
