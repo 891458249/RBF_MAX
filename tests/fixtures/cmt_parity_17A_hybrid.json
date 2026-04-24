@@ -1,0 +1,52 @@
+{
+  "_comment_disclaimer": [
+    "NOT a cmt binary parity fixture.",
+    "Expected values computed by independent re-implementation per plan section C pseudocode.",
+    "True cmt binary parity is deferred to Slice 17B (T-30).",
+    "",
+    "Slice 17A audit trail: documents the hybrid scalar+quat test input used by",
+    "tests/test_feature_spec.cpp::HeteroFit_hybrid_scalar_quat_*.",
+    "Tests hard-code these doubles in C++ to avoid JSON-parse rounding; this file",
+    "serves as reviewer audit trail and as the payload Slice 17B's cmt binary parity",
+    "generator (scripts/gen_cmt_fixture.mel) will overwrite with real cmt output."
+  ],
+  "slice": "17A",
+  "group": "D",
+  "test": "hybrid_scalar_quat_InterpolationAtTrainingPoints",
+  "spec": {
+    "scalar_dim": 1,
+    "quat_blocks": [
+      {"space": "SwingTwist", "axis": [0.0, 1.0, 0.0]}
+    ]
+  },
+  "N": 3,
+  "scalar_centers": [[-1.0], [0.0], [1.0]],
+  "quat_feature_layout": "row = pose, cols = (x, y, z, w)",
+  "quat_features": [
+    [
+      [0.0,                   0.0,                   0.0, 1.0],
+      [0.0,                   0.49999999999999994,   0.0, 0.86602540378443871],
+      [0.25881904510252074,   0.0,                   0.0, 0.96592582628906831]
+    ]
+  ],
+  "axis_angle_closed_forms": {
+    "pose_0": "identity",
+    "pose_1": "60 deg around +Y  : (0, sin(30 deg), 0, cos(30 deg)) — pure twist about Y",
+    "pose_2": "30 deg around +X  : (sin(15 deg), 0, 0, cos(15 deg)) — swing only (twist identity) about Y"
+  },
+  "targets_primary": [[0.0, 1.0], [0.5, -0.25], [1.0, 0.75]],
+  "fit_params_primary": {
+    "kernel": {"type": "Gaussian", "eps": 1.0},
+    "poly_degree": -1,
+    "lambda": 1e-10
+  },
+  "expectations": {
+    "status": "OK",
+    "weights_shape_rows": 9,
+    "weights_shape_cols_primary": 2,
+    "feature_norms_size": 1,
+    "feature_norms_positive": true,
+    "distance_norm_positive": true,
+    "residual_norm_upper_bound": 1e-9
+  }
+}

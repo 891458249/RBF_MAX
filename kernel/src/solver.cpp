@@ -32,6 +32,7 @@
 #include <Eigen/SVD>
 
 #include "rbfmax/distance.hpp"
+#include "rbfmax/quaternion.hpp"
 
 namespace rbfmax {
 namespace solver {
@@ -418,6 +419,320 @@ FitResult do_fit(const Eigen::Ref<const MatrixX>& centers,
     }
 }
 
+// =============================================================================
+//  Heterogeneous input validation (Slice 17A)
+// =============================================================================
+//
+//  Checks the heterogeneous-fit invariants before the compositing pipeline
+//  runs.  Callers receive the status back via FitResult::status; no exceptions
+//  are thrown.
+//
+FitStatus validate_composite_inputs(
+    const Eigen::Ref<const MatrixX>& scalar_centers,
+    const std::vector<MatrixX>& quat_features,
+    const Eigen::Ref<const MatrixX>& targets,
+    const FitOptions& options,
+    const FeatureSpec& spec) noexcept {
+    // Block count must match spec.
+    if (quat_features.size() != spec.quat_blocks.size()) {
+        return FitStatus::INVALID_INPUT;
+    }
+
+    // A fully-empty spec (no scalars AND no quats) is degenerate.
+    if (spec.scalar_dim == 0 && spec.quat_blocks.empty()) {
+        return FitStatus::INVALID_INPUT;
+    }
+
+    // Infer sample count from whichever block is populated.
+    Index N = 0;
+    if (spec.scalar_dim > 0) {
+        N = scalar_centers.rows();
+        if (scalar_centers.cols() != spec.scalar_dim) {
+            return FitStatus::INVALID_INPUT;
+        }
+    } else if (!quat_features.empty()) {
+        N = quat_features.front().rows();
+    }
+    if (N == 0) {
+        return FitStatus::INSUFFICIENT_SAMPLES;
+    }
+
+    if (targets.rows() != N) return FitStatus::INVALID_INPUT;
+    if (targets.cols() == 0) return FitStatus::INVALID_INPUT;
+    if (!targets.allFinite()) return FitStatus::INVALID_INPUT;
+    if (spec.scalar_dim > 0 && !scalar_centers.allFinite()) {
+        return FitStatus::INVALID_INPUT;
+    }
+
+    // Each quat block must be N × 4 with unit-length rows (within tolerance).
+    for (std::size_t k = 0; k < quat_features.size(); ++k) {
+        const MatrixX& qf = quat_features[k];
+        if (qf.rows() != N) return FitStatus::INVALID_INPUT;
+        if (qf.cols() != 4) return FitStatus::INVALID_INPUT;
+        if (!qf.allFinite()) return FitStatus::INVALID_INPUT;
+        for (Index i = 0; i < N; ++i) {
+            const Scalar n2 = qf.row(i).squaredNorm();
+            if (!std::isfinite(n2)) return FitStatus::INVALID_INPUT;
+            // Tolerance kQuatIdentityEps=1e-14 on squared norm (≈ 1e-7 on norm).
+            if (std::abs(n2 - Scalar(1)) > Scalar(1e-6)) {
+                return FitStatus::INVALID_INPUT;
+            }
+        }
+        // Axis must be unit length for Swing/Twist/SwingTwist.
+        if (spec.quat_blocks[k].space != SolverSpace::Full) {
+            const Scalar axn2 = spec.quat_blocks[k].axis.squaredNorm();
+            if (!std::isfinite(axn2)) return FitStatus::INVALID_INPUT;
+            if (std::abs(axn2 - Scalar(1)) > Scalar(1e-6)) {
+                return FitStatus::INVALID_INPUT;
+            }
+        }
+    }
+
+    // Polynomial-degree sufficiency: Slice 17A keeps classical basis over the
+    // scalar centers; heterogeneous polynomial terms are out of scope here.
+    if (options.poly_degree >= 0 && spec.scalar_dim > 0) {
+        const auto basis = generate_monomial_basis(
+            static_cast<int>(spec.scalar_dim), options.poly_degree);
+        if (static_cast<Index>(basis.size()) > N) {
+            return FitStatus::INSUFFICIENT_SAMPLES;
+        }
+    }
+    return FitStatus::OK;
+}
+
+// =============================================================================
+//  Composite distance-matrix builder (Slice 17A)
+// =============================================================================
+//
+//  Replicates the cmt setFeatures pipeline (linearRegressionSolver.cpp:20-132)
+//  for heterogeneous scalar + quaternion RBF inputs.  Pure 17A scope — no
+//  one-hot θ switch, no persisted sample_radii in FitResult (Decision 4).
+//
+//  Column layout (matches cmt where applicable; Full-mode is a 17A design
+//  choice — see plan Drift #3):
+//    * Scalar block (cols 0 .. N-1)  when scalar_dim > 0
+//        m.col(i) = || X_normalised.row(i) - X_normalised.row(j) || for all j
+//        (i.e. column i = distances from every sample to sample i)
+//        Then scalar block is Frobenius-normalised by its own norm and RBFed
+//        with the global kernel.
+//    * Quat block k (cols blockOffset[k] .. blockOffset[k] + cpp*N - 1),
+//      cpp = FeatureSpec::cols_per_pose(space):
+//        Full         → m(s1, blockOffset[k] + s)         = geo(q_s1, q_s)
+//        Swing        → m(s1, blockOffset[k] + 2s)        = swing_dist(...)
+//                       m(s1, blockOffset[k] + 2s + 1)    = 0
+//        Twist        → m(s1, blockOffset[k] + 2s)        = 0
+//                       m(s1, blockOffset[k] + 2s + 1)    = twist_dist(...)
+//        SwingTwist   → both distances filled
+//      Per-sample adaptive radius tracking applies to all four modes (plan
+//      Step 3.4 constraint #4): sample_radii[s] = min non-trivial distance
+//      across ALL quat blocks involving sample s.  RBF is then applied per
+//      training-pose column group using sample_radii[s].
+//
+//  Returns false on NaN / overflow in the pipeline; true on success.  The
+//  caller's out-params are in a partially-filled state on false return —
+//  callers must wrap the failure in FitStatus::INVALID_INPUT at the
+//  FitResult level.
+//
+bool build_composite_distance_matrix(
+        const Eigen::Ref<const MatrixX>& scalar_centers,
+        const std::vector<MatrixX>& quat_features,
+        const FeatureSpec& spec,
+        const KernelParams& kernel,
+        MatrixX& out_X_scalar_normalised,
+        VectorX& out_feature_norms,
+        Scalar& out_distance_norm,
+        VectorX& out_sample_radii,
+        MatrixX& out_M) noexcept {
+    try {
+        const Index N = spec.scalar_dim > 0
+                            ? scalar_centers.rows()
+                            : (quat_features.empty() ? Index(0)
+                                                     : quat_features.front().rows());
+        if (N == 0) return false;
+
+        const Index total_cols = spec.total_distance_columns(N);
+        out_M = MatrixX::Zero(N, total_cols);
+
+        // -------------------------------------------------------------------
+        // Step 1-4 — scalar block: per-column L2 → pairwise distance →
+        // Frobenius → RBF.  Only if scalar_dim > 0.
+        // -------------------------------------------------------------------
+        const Index scalar_cols = (spec.scalar_dim > 0) ? N : Index(0);
+        out_X_scalar_normalised =
+            (spec.scalar_dim > 0) ? MatrixX(scalar_centers) : MatrixX();
+        out_feature_norms =
+            (spec.scalar_dim > 0) ? VectorX::Zero(spec.scalar_dim) : VectorX();
+        out_distance_norm = Scalar(0);
+
+        if (spec.scalar_dim > 0) {
+            // Step 1 — per-column L2 normalise.
+            for (Index j = 0; j < spec.scalar_dim; ++j) {
+                const Scalar n = out_X_scalar_normalised.col(j).norm();
+                out_feature_norms(j) = n;
+                if (n != Scalar(0)) {
+                    out_X_scalar_normalised.col(j) /= n;
+                }
+            }
+
+            // Step 2 — pairwise distance columns (cmt L56-58 convention).
+            for (Index i = 0; i < N; ++i) {
+                for (Index r = 0; r < N; ++r) {
+                    out_M(r, i) = (out_X_scalar_normalised.row(r) -
+                                    out_X_scalar_normalised.row(i))
+                                      .norm();
+                }
+            }
+
+            // Step 3 — Frobenius-normalise the scalar block (cmt L60-62).
+            out_distance_norm =
+                out_M.block(0, 0, N, scalar_cols).norm();
+            if (out_distance_norm > Scalar(0)) {
+                out_M.block(0, 0, N, scalar_cols) /= out_distance_norm;
+            }
+
+            // Step 4 — applyRbf on scalar block with global radius
+            //   effective_r = distance  (rbfmax global radius = 1 convention;
+            //   KernelParams.eps carries the shape parameter for kernels that
+            //   consume one).
+            for (Index r = 0; r < N; ++r) {
+                for (Index c = 0; c < scalar_cols; ++c) {
+                    out_M(r, c) = evaluate_kernel(kernel, out_M(r, c));
+                }
+            }
+        }
+
+        if (quat_features.empty()) {
+            out_sample_radii = VectorX();
+            return true;
+        }
+
+        // -------------------------------------------------------------------
+        // Step 5 — build raw per-block distance matrices, track sample_radii.
+        // -------------------------------------------------------------------
+        const std::size_t B = quat_features.size();
+        std::vector<MatrixX> mQuat(B);
+        for (std::size_t k = 0; k < B; ++k) {
+            const Index cpp = FeatureSpec::cols_per_pose(spec.quat_blocks[k].space);
+            mQuat[k] = MatrixX::Zero(N, N * cpp);
+        }
+
+        // Pre-decompose each training quat per block for Swing/Twist modes —
+        // avoids redundant decomposition across the O(N²) pair loop.
+        std::vector<std::vector<Quaternion>> swings(B), twists(B);
+        std::vector<std::vector<Quaternion>> full_quats(B);
+        for (std::size_t k = 0; k < B; ++k) {
+            const SolverSpace space = spec.quat_blocks[k].space;
+            const Vector3& axis = spec.quat_blocks[k].axis;
+            if (space == SolverSpace::Full) {
+                full_quats[k].resize(static_cast<std::size_t>(N));
+                for (Index s = 0; s < N; ++s) {
+                    full_quats[k][static_cast<std::size_t>(s)] = Quaternion(
+                        quat_features[k](s, 3),  // w
+                        quat_features[k](s, 0),  // x
+                        quat_features[k](s, 1),  // y
+                        quat_features[k](s, 2)); // z
+                }
+            } else {
+                swings[k].resize(static_cast<std::size_t>(N));
+                twists[k].resize(static_cast<std::size_t>(N));
+                for (Index s = 0; s < N; ++s) {
+                    const Quaternion q(quat_features[k](s, 3),
+                                       quat_features[k](s, 0),
+                                       quat_features[k](s, 1),
+                                       quat_features[k](s, 2));
+                    const rotation::SwingTwist st =
+                        rotation::decompose_swing_twist(q, axis);
+                    swings[k][static_cast<std::size_t>(s)] = st.swing;
+                    twists[k][static_cast<std::size_t>(s)] = st.twist;
+                }
+            }
+        }
+
+        out_sample_radii = VectorX::Ones(N);
+        const Scalar kSampleEps = Scalar(1e-6);
+
+        for (std::size_t k = 0; k < B; ++k) {
+            const SolverSpace space = spec.quat_blocks[k].space;
+            const Index cpp = FeatureSpec::cols_per_pose(space);
+            for (Index s1 = 0; s1 < N; ++s1) {
+                for (Index s2 = 0; s2 < N; ++s2) {
+                    if (space == SolverSpace::Full) {
+                        const Scalar d = metric::quaternion_geodesic_distance(
+                            full_quats[k][static_cast<std::size_t>(s1)],
+                            full_quats[k][static_cast<std::size_t>(s2)]);
+                        mQuat[k](s1, s2) = d;
+                        if (d > kSampleEps && d < out_sample_radii(s1)) {
+                            out_sample_radii(s1) = d;
+                        }
+                    } else {
+                        const Scalar swing_d = metric::quaternion_geodesic_distance(
+                            swings[k][static_cast<std::size_t>(s1)],
+                            swings[k][static_cast<std::size_t>(s2)]);
+                        const Scalar twist_d = metric::quaternion_geodesic_distance(
+                            twists[k][static_cast<std::size_t>(s1)],
+                            twists[k][static_cast<std::size_t>(s2)]);
+
+                        const Scalar emit_swing =
+                            (space == SolverSpace::Twist) ? Scalar(0) : swing_d;
+                        const Scalar emit_twist =
+                            (space == SolverSpace::Swing) ? Scalar(0) : twist_d;
+
+                        mQuat[k](s1, s2 * 2)     = emit_swing;
+                        mQuat[k](s1, s2 * 2 + 1) = emit_twist;
+
+                        if (emit_swing > kSampleEps &&
+                            emit_swing < out_sample_radii(s1)) {
+                            out_sample_radii(s1) = emit_swing;
+                        }
+                        if (emit_twist > kSampleEps &&
+                            emit_twist < out_sample_radii(s1)) {
+                            out_sample_radii(s1) = emit_twist;
+                        }
+                    }
+                }
+            }
+
+            // Step 6 — per-training-pose RBF, using sample_radii[pose].
+            // rbfmax convention: "effective radius" R scales the distance
+            // argument before the kernel, i.e. φ(raw/R).  This generalises
+            // cmt's Gaussian(radius*R) to every rbfmax kernel type uniformly.
+            for (Index pose = 0; pose < N; ++pose) {
+                const Scalar R = out_sample_radii(pose);
+                const Scalar R_eff = (R > Scalar(0)) ? R : Scalar(1);
+                if (space == SolverSpace::Full) {
+                    for (Index r = 0; r < N; ++r) {
+                        const Scalar raw = mQuat[k](r, pose);
+                        mQuat[k](r, pose) =
+                            evaluate_kernel(kernel, raw / R_eff);
+                    }
+                } else {
+                    for (Index r = 0; r < N; ++r) {
+                        const Scalar raw_s = mQuat[k](r, pose * 2);
+                        const Scalar raw_t = mQuat[k](r, pose * 2 + 1);
+                        mQuat[k](r, pose * 2) =
+                            evaluate_kernel(kernel, raw_s / R_eff);
+                        mQuat[k](r, pose * 2 + 1) =
+                            evaluate_kernel(kernel, raw_t / R_eff);
+                    }
+                }
+            }
+
+            // Insert this block into the main matrix at the right offset.
+            Index block_offset = scalar_cols;
+            for (std::size_t kk = 0; kk < k; ++kk) {
+                block_offset +=
+                    FeatureSpec::cols_per_pose(spec.quat_blocks[kk].space) * N;
+            }
+            out_M.block(0, block_offset, N, N * cpp) = mQuat[k];
+        }
+
+        if (!out_M.allFinite()) return false;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 }  // namespace
 
 // =============================================================================
@@ -496,6 +811,165 @@ FitResult fit(const Eigen::Ref<const MatrixX>& centers,
         selected = kLambdaMin;
     }
     return do_fit(centers, targets, options, selected);
+}
+
+// =============================================================================
+//  Heterogeneous fit (Slice 17A) — scalar + quaternion input blocks
+// =============================================================================
+//
+//  Scalar-only dispatch branch — `spec.is_scalar_only() && quat_features.empty()`
+//  — explicitly returns legacy fit(scalar_centers, targets, options, λ).  The
+//  legacy function body is not refactored; the four new FitResult tail fields
+//  (feature_spec / quat_features / feature_norms / distance_norm) remain
+//  default-constructed in the scalar-only path.  This invariant is verified by
+//  the 17A-SCALAR-ORACLE test group.
+//
+//  Heterogeneous branch (Slice 17A phase-in) — validates shapes; full cmt
+//  composite pipeline lands in the second 17A commit (build_composite_distance
+//  _matrix + θ solve).  Until then, non-scalar-only calls return
+//  FitStatus::INVALID_INPUT with solver_path=FAILED and spec snapshot on
+//  the result so callers can tell a true rejection from the placeholder.
+//
+FitResult fit(const Eigen::Ref<const MatrixX>& scalar_centers,
+              const std::vector<MatrixX>& quat_features,
+              const Eigen::Ref<const MatrixX>& targets,
+              const FitOptions& options,
+              const FeatureSpec& spec,
+              Scalar lambda) noexcept {
+    // Scalar-only dispatch — 17A-SCALAR-ORACLE invariant.
+    //
+    // The legacy fit() does not know about FeatureSpec, so we overlay the
+    // caller's spec onto its returned FitResult.  The 10 pre-17A fields
+    // pass through byte-identically; the other 3 new tail fields
+    // (quat_features, feature_norms, distance_norm) stay default-
+    // constructed because legacy fit() returns a FitResult built from
+    // the default constructor (which our Slice 17A edit initialises them
+    // to empty / 0).  The overlay assignment is pure post-processing:
+    // it does not touch the arithmetic path.
+    if (spec.is_scalar_only() && quat_features.empty()) {
+        FitResult fr = fit(scalar_centers, targets, options, lambda);
+        fr.feature_spec = spec;
+        return fr;
+    }
+
+    FitResult fr;
+    fr.kernel = options.kernel;
+    fr.poly_degree = options.poly_degree;
+    fr.feature_spec = spec;
+
+    const FitStatus pre =
+        validate_composite_inputs(scalar_centers, quat_features, targets,
+                                  options, spec);
+    if (pre != FitStatus::OK) {
+        fr.status = pre;
+        fr.solver_path = SolverPath::FAILED;
+        return fr;
+    }
+
+    if (!std::isfinite(lambda)) {
+        fr.status = FitStatus::INVALID_INPUT;
+        fr.solver_path = SolverPath::FAILED;
+        return fr;
+    }
+    if (lambda < kLambdaMin) {
+        lambda = kLambdaMin;
+    }
+
+    // -----------------------------------------------------------------------
+    // Composite distance-matrix pipeline (cmt setFeatures steps 1-6).  On
+    // failure we surface INVALID_INPUT + FAILED solver_path; caller can
+    // distinguish this from INSUFFICIENT_SAMPLES via the pre-check above.
+    // -----------------------------------------------------------------------
+    MatrixX X_norm;
+    VectorX feature_norms;
+    Scalar distance_norm = Scalar(0);
+    VectorX sample_radii;
+    MatrixX M;
+    const bool built = build_composite_distance_matrix(
+        scalar_centers, quat_features, spec, options.kernel,
+        X_norm, feature_norms, distance_norm, sample_radii, M);
+    if (!built) {
+        fr.status = FitStatus::INVALID_INPUT;
+        fr.solver_path = SolverPath::FAILED;
+        return fr;
+    }
+
+    // Slice 17A solve: ridge regression on the cols × cols normal equations.
+    //   (MᵀM + λI) w_compact = Mᵀ Y
+    // Note: fr.weights.rows() == cols (== spec.total_distance_columns(N)),
+    // not N.  The scalar-only predict path treats weights as N × M; hetero
+    // fit deliberately deviates here since Slice 17A does not yet ship a
+    // predict path for the hetero branch.  The one-hot θ + predict_hetero
+    // design arrives in Slice 17E.
+    try {
+        const Index cols = M.cols();
+        MatrixX MtM = M.transpose() * M;
+        for (Index i = 0; i < cols; ++i) {
+            MtM(i, i) += lambda;
+        }
+        const MatrixX MtY = M.transpose() * targets;
+
+        SolverPath path = SolverPath::FAILED;
+        Scalar cond = Scalar(-1);
+        const bool ok =
+            solve_symmetric_system(MtM, MtY, fr.weights, path, cond);
+
+        fr.solver_path = path;
+        fr.condition_number = cond;
+        fr.lambda_used = lambda;
+
+        if (!ok) {
+            fr.status = FitStatus::SINGULAR_MATRIX;
+            return fr;
+        }
+
+        // Residual ||M w - Y||_F / ||Y||_F — the ridge-regression analog of
+        // the scalar fit's "how well did the linear system close".  Used by
+        // Group D InterpolationAtTrainingPoints to gate correctness.
+        const MatrixX residual = M * fr.weights - targets;
+        const Scalar y_norm = targets.norm();
+        fr.residual_norm =
+            (y_norm > Scalar(0)) ? (residual.norm() / y_norm) : residual.norm();
+
+        // Populate 17A tail fields on success.
+        // fr.feature_spec already set above; now fill the other 3.
+        fr.quat_features = quat_features;  // owned copy
+        fr.feature_norms = feature_norms;
+        fr.distance_norm = distance_norm;
+
+        // Store pre-normalisation scalar centers in fr.centers for audit
+        // (legacy contract: fr.centers is the training input echo).  Slice
+        // 17B may revisit this once cmt binary parity lands — see T-30.
+        fr.centers = scalar_centers;
+
+        // poly_coeffs: hetero path does not emit a polynomial tail in 17A.
+        fr.poly_coeffs = MatrixX(0, targets.cols());
+
+        fr.status = FitStatus::OK;
+        return fr;
+    } catch (...) {
+        fr.status = FitStatus::INVALID_INPUT;
+        fr.solver_path = SolverPath::FAILED;
+        return fr;
+    }
+}
+
+FitResult fit(const Eigen::Ref<const MatrixX>& scalar_centers,
+              const std::vector<MatrixX>& quat_features,
+              const Eigen::Ref<const MatrixX>& targets,
+              const FitOptions& options,
+              const FeatureSpec& spec,
+              LambdaAuto auto_tag) noexcept {
+    if (spec.is_scalar_only() && quat_features.empty()) {
+        FitResult fr = fit(scalar_centers, targets, options, auto_tag);
+        fr.feature_spec = spec;
+        return fr;
+    }
+    // Hetero GCV on cols × cols normal equations is Slice 17E scope; 17A
+    // falls back to the fixed-λ overload with the GCV-default 1e-6, mirroring
+    // the legacy fallback value used when GCV scoring is pathological.
+    return fit(scalar_centers, quat_features, targets, options, spec,
+               Scalar(1e-6));
 }
 
 // -----------------------------------------------------------------------------

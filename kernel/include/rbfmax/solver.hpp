@@ -17,7 +17,7 @@
 //     info() flags. The chosen path is reported in FitResult::solver_path,
 //     and condition_number is filled only on the BDCSVD branch.
 //   * Polynomial tail (poly_degree ≥ 0) is solved via QR elimination — see
-//     docs/math_derivation.md §13.
+//     docs/spec/math_derivation.md §13.
 //   * Lambda lower bound: kLambdaMin (1e-12). Smaller values are silently
 //     clamped in Release; Debug builds trigger eigen_assert.
 //   * All public functions are noexcept. Errors surface via the
@@ -41,9 +41,11 @@
 #define RBFMAX_SOLVER_HPP
 
 #include <cstdint>
+#include <vector>
 
 #include <Eigen/Core>
 
+#include "rbfmax/feature_spec.hpp"
 #include "rbfmax/kernel_functions.hpp"
 #include "rbfmax/types.hpp"
 
@@ -121,6 +123,29 @@ struct FitResult {
     Scalar       condition_number;  ///< -1 unless BDCSVD path was taken.
     Scalar       residual_norm;     ///< ||A w + P v - y||_F / ||y||_F.
 
+    // -------------------------------------------------------------------------
+    // Phase 2A.5 Slice 17A additions (ABI-additive tail fields).
+    // All default-constructed to empty/zero when the legacy scalar-only
+    // fit(centers, targets, opts, lambda) path is taken — this is the
+    // 17A-SCALAR-ORACLE invariant, verified by the test group of the same
+    // name in tests/test_feature_spec.cpp.
+    //
+    // Populated only by the heterogeneous fit() overloads when
+    // spec.quat_blocks is non-empty (see feature_spec.hpp).
+    //
+    // sample_radii is intentionally NOT added here — it arrives in Slice 17F
+    // with the proper name (no slice suffix), per Phase 2A.5 plan Decision 4.
+    // -------------------------------------------------------------------------
+    FeatureSpec          feature_spec;     ///< owned copy of fit's spec;
+                                           ///< default (scalar_dim=0, no blocks)
+                                           ///< in scalar-only fits.
+    std::vector<MatrixX> quat_features;    ///< N × 4 per block (x,y,z,w);
+                                           ///< empty for scalar-only fits.
+    VectorX              feature_norms;    ///< cmt step-1 per-scalar-column L2;
+                                           ///< empty for scalar-only fits.
+    Scalar               distance_norm;    ///< cmt step-3 Frobenius of scalar
+                                           ///< distance block; 0 for scalar-only.
+
     FitResult() noexcept
         : weights(),
           poly_coeffs(),
@@ -131,7 +156,11 @@ struct FitResult {
           solver_path(SolverPath::FAILED),
           status(FitStatus::INVALID_INPUT),
           condition_number(-1),
-          residual_norm(0) {}
+          residual_norm(0),
+          feature_spec(),
+          quat_features(),
+          feature_norms(),
+          distance_norm(0) {}
 };
 
 // -----------------------------------------------------------------------------
@@ -196,6 +225,51 @@ FitResult fit(const Eigen::Ref<const MatrixX>& centers,
 FitResult fit(const Eigen::Ref<const MatrixX>& centers,
               const Eigen::Ref<const MatrixX>& targets,
               const FitOptions& options,
+              LambdaAuto) noexcept;
+
+// -----------------------------------------------------------------------------
+//  Heterogeneous fit (Phase 2A.5 Slice 17A) — scalar + quaternion input blocks
+// -----------------------------------------------------------------------------
+//
+//  Adds optional quaternion input blocks alongside the classical scalar
+//  feature matrix.  Each row of `scalar_centers` corresponds to the same
+//  row in every `quat_features[k]` and in `targets` — a single training
+//  pose.
+//
+//  Layout of `quat_features`:
+//    * size() must equal spec.quat_blocks.size()
+//    * each MatrixX has shape N × 4 with column order (x, y, z, w)
+//    * each row must be unit-length within kQuatIdentityEps (violation
+//      surfaces as FitStatus::INVALID_INPUT)
+//
+//  Dispatch behavior (legacy compatibility — 17A-SCALAR-ORACLE invariant):
+//    * If `spec.is_scalar_only()` (i.e. quat_blocks is empty), this
+//      function explicitly calls the legacy
+//      fit(scalar_centers, targets, options, lambda) overload and returns
+//      its output verbatim.  The legacy function body is NOT refactored
+//      into a shared core; byte-identical output with all pre-17A
+//      diagnostic fields (status, solver_path, condition_number,
+//      residual_norm) preserved.  The tail fields (feature_spec,
+//      quat_features, feature_norms, distance_norm) remain
+//      default-constructed in the scalar-only path.
+//    * Otherwise, the cmt-style composite distance-matrix pipeline
+//      (linearRegressionSolver.cpp setFeatures steps 1-6) builds the
+//      heterogeneous matrix.  Slice 17A keeps rbfmax's classical
+//      Tikhonov solver fallback (LLT → LDLT → BDCSVD); the one-hot θ
+//      switch is deferred to Slice 17E.
+//
+FitResult fit(const Eigen::Ref<const MatrixX>& scalar_centers,
+              const std::vector<MatrixX>& quat_features,
+              const Eigen::Ref<const MatrixX>& targets,
+              const FitOptions& options,
+              const FeatureSpec& spec,
+              Scalar lambda) noexcept;
+
+FitResult fit(const Eigen::Ref<const MatrixX>& scalar_centers,
+              const std::vector<MatrixX>& quat_features,
+              const Eigen::Ref<const MatrixX>& targets,
+              const FitOptions& options,
+              const FeatureSpec& spec,
               LambdaAuto) noexcept;
 
 /// Predict a single output channel (column 0 of weights/poly_coeffs).

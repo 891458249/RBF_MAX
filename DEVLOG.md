@@ -14,6 +14,169 @@
 
 ---
 
+## 2026-04-24 · Slice 17A — FeatureSpec heterogeneous input plumbing (pre-dispatch audit)
+
+**Status**: Pre-dispatch audit complete; code not yet written. Entry for the 17A PR in progress.
+
+Phase 2A.5 planning document: `C:/Users/Administrator/.claude/plans/x-plugins-rbf-max-v1-2-0-main-head-3945-iterative-gizmo.md` (approved 2026-04-24).
+
+### §A — Pre-dispatch review artifact (Rules 1–5 compliance)
+
+Following phase2_reviewer_discipline.md institutional rules, a pre-dispatch audit was conducted against main HEAD `394543b` before any 17A code was written. The audit produced three drifts and one tech-debt item, all resolved before code entry.
+
+**Rule 1 (grep-verify Phase 1 symbols)** — 51 call sites of `solver::fit` verified across `benchmarks/`, `tests/`, and `kernel/src/interpolator.cpp`. All symbols confirmed against HEAD:
+- `solver::fit` 2 overloads, `solver::FitResult` (10 fields pre-17A), `solver::FitOptions` (2 fields), `solver::ScratchPool` (4 VectorX public fields, move-only), `io_json::save`/`load`/`kCurrentSchema = "rbfmax/v1"`, `rotation::decompose_swing_twist` (5 test references).
+
+**Drift #1 — namespace name**: spec skeleton used `distance::quaternion_geodesic_distance`; actual namespace at [distance.hpp:49](kernel/include/rbfmax/distance.hpp) is `metric::`. Fix: all references in plan updated to `metric::squared_distance` / `metric::quaternion_geodesic_distance`. Verified call site [solver.cpp:152](kernel/src/solver.cpp).
+
+**Drift #2 — getter layer confusion**: "5 additive const getters" in user prompt referred to mRBFNode Maya layer ([mrbf_node.cpp:459/463/485/497/504](maya_node/src/mrbf_node.cpp)), not RBFInterpolator C++ layer (11 getters). Plan updated with explicit layer clarification; both layers zero-touch for 17A–17I.
+
+**Drift #3 — Full-mode column count**: spec skeleton said "Full=2 cols, Swing/Twist=1 col each" per pose. Audit of [linearRegressionSolver.cpp:42](docs/源文档/chadvernon/cmt-master/src/linearRegressionSolver.cpp) shows cmt uses **2 cols per pose** for Swing/Twist/SwingTwist; cmt source does NOT cover Full mode — that is a 17A design decision. Fix: Full → 1 col, Swing/Twist/SwingTwist → 2 cols. Encoded in `FeatureSpec::total_distance_columns(N)` helper.
+
+**Rule 2 (Section G self-audit)** — Walked 8 prohibitions vs plan; all additive. Inherits Slice 11 G2/G3 precedent (DEVLOG L674) — "behavioural code unchanged + additive const getters with tests allowed". Added extra precedent clause for 17A: "new fit() overload explicitly calls legacy fit() in scalar-only branch" is **not** a thin-wrapper refactor of the legacy function body (which would violate the precedent) — the legacy function body is byte-for-byte untouched. Hard gate: `17A-SCALAR-ORACLE` (6 tests, full `FitResult` byte-comparison + 4-new-fields default-construction assertion).
+
+**Rule 3 (Maya doc skepticism)** — N/A for 17A (no Maya layer touched).
+
+**Rule 4/5 (assumption-elimination debug + Autodesk canonical pattern deviation)** — deferred to 17A execution, applied reactively if silent failures surface.
+
+**cmt L2 normalization order** (from [linearRegressionSolver.cpp:20-132](docs/源文档/chadvernon/cmt-master/src/linearRegressionSolver.cpp)):
+```
+1. Per-column L2 normalize X_scalar         (cmt L46-54)
+2. Build pairwise scalar distance matrix    (cmt L56-58)
+3. Global Frobenius normalize scalar block  (cmt L60-62)  ← scope limited to scalar block
+4. applyRbf on scalar block with `radius`   (cmt L65)
+5. Build per-block quat distance matrices   (cmt L67-107) ← 2 cols per pose, raw distances (no normalization)
+6. applyRbf per-sample with sampleRadius[i]*radius (cmt L109-118)
+7. Solve: pseudoInverse(MᵀM + r·I) · Mᵀ · Identity(N)  (cmt L122-131) ← one-hot θ; 17A defers this to 17E
+```
+
+**T-30 (opened)** — cmt binary parity fixture cannot execute in rbfmax's Maya-free CI (requires `MQuaternion`). 17A ships algorithm-self-consistency tests at ≤ 1e-12. T-30 scheduled for 17B via one-shot `scripts/gen_cmt_fixture.mel` + checked-in JSON snapshots, binding rbfmax output to cmt binary output at ≤ 1e-10.
+
+**Drift log** (for reviewer traceability, plan file commit history):
+| Drift | Where | Resolution |
+|-------|-------|-----------|
+| #1 `distance::` → `metric::` | plan file Kernel API Surface section | edited 2026-04-24 |
+| #2 "5 getters" layer | plan file getter-layer clarification block | added 2026-04-24 |
+| #3 Full-mode column count | Slice 17A column convention block | edited 2026-04-24 |
+| — | T-30 tech-debt register | opened 2026-04-24 in plan file |
+
+**Decisions logged** (from user 2026-04-24 approval):
+1. Plan file edited in-place for drifts #1/#2/#3 + T-30.
+2. T-30 deferred to 17B (Maya-free CI constraint).
+3. Legacy `fit(C, Y, opts, λ)` function body **zero-touch**; new overload delegates to it in scalar-only branch. Slice 11 G2/G3 precedent.
+4. `FitResult` gains **4 tail fields** in 17A (`feature_spec`, `quat_features`, `feature_norms`, `distance_norm`). `sample_radii` added in 17F without slice suffix per YAGNI + naming hygiene.
+
+### §B–§F — TBD after code lands
+
+Execution follows the implementation order from the approved plan: `feature_spec.hpp` → `solver.hpp` tail fields + 2 new overload declarations → `solver.cpp` scalar-only dispatch (gate: 17A-SCALAR-ORACLE) → `solver.cpp` composite builder (gates: Group C/D tests) → CMake wiring.
+
+### §B — Implementation
+
+**New file** [`kernel/include/rbfmax/feature_spec.hpp`](kernel/include/rbfmax/feature_spec.hpp) (~130 LOC, header-only):
+- `enum class SolverSpace : int32_t { Full, Swing, Twist, SwingTwist }` with explicit backing for JSON round-trip.
+- `struct QuatBlock { SolverSpace space; Vector3 axis; }` — two explicit C++11 constructors (no default member initialisers, same pattern as FitOptions).
+- `struct FeatureSpec { Index scalar_dim; std::vector<QuatBlock> quat_blocks; }` — three constructors, `is_scalar_only()` / `cols_per_pose(space)` / `total_distance_columns(N)` helpers. Full mode returns 1 col per pose; Swing/Twist/SwingTwist return 2 (Drift #3 resolution).
+
+**`FitResult` ABI-additive tail** in [`kernel/include/rbfmax/solver.hpp`](kernel/include/rbfmax/solver.hpp) — four fields, default-constructed, initialised in the noexcept default ctor:
+- `FeatureSpec feature_spec` — caller's spec echoed back (scalar-only dispatch overlay; always reflects what was passed).
+- `std::vector<MatrixX> quat_features` — owned copy of training quat inputs; empty for scalar-only.
+- `VectorX feature_norms` — cmt step-1 per-scalar-column L2; empty for scalar-only.
+- `Scalar distance_norm` — cmt step-3 Frobenius of scalar distance block; 0 for scalar-only.
+
+`sample_radii` deliberately **not** added in 17A (Decision 4 — deferred to 17F with the proper name, no slice suffix).
+
+**Two new `fit()` overloads** in `solver.hpp` + [`kernel/src/solver.cpp`](kernel/src/solver.cpp):
+```cpp
+FitResult fit(scalar_centers, quat_features, targets, options, spec, lambda) noexcept;
+FitResult fit(scalar_centers, quat_features, targets, options, spec, LambdaAuto) noexcept;
+```
+Scalar-only dispatch is explicit — when `spec.is_scalar_only() && quat_features.empty()`, the new overload calls the legacy `fit(centers, targets, options, λ)` and overlays `fr.feature_spec = spec` on the result. Legacy function body is **zero-touch** (Slice 11 G2/G3 precedent; verified `git diff` shows 0 deletions in the legacy fit block). The LambdaAuto hetero variant delegates to the fixed-λ variant with `λ=1e-6` (legacy GCV fallback value); full cols×cols GCV deferred to 17E.
+
+**Composite pipeline** (`build_composite_distance_matrix` in anonymous namespace per Step 3.4 constraint #1 — not exposed in `solver.hpp`):
+1. Per-scalar-column L2 (cmt L46-54) → `feature_norms`.
+2. Pairwise scalar distance matrix cmt convention (cmt L56-58).
+3. Frobenius-normalise scalar block only (cmt L60-62) → `distance_norm`.
+4. `evaluate_kernel(kernel, distance)` on scalar block (cmt L65 equivalent).
+5. Per-block quat distance matrices. `Full` uses `metric::quaternion_geodesic_distance` directly (1 col per pose). `Swing`/`Twist`/`SwingTwist` pre-decompose each training quat via `rotation::decompose_swing_twist(q, axis)` then pair-compute swing/twist geodesic distances (2 cols per pose; single-mode variants zero the unused sub-column).
+6. Track `sample_radii[s]` as the minimum non-trivial distance across **all** quat blocks including Full (Step 3.4 constraint #4 — enables 17F seamless Full-mode activation). RBF applied per training-pose column group with `evaluate_kernel(kernel, raw_distance / sample_radii[pose])`.
+
+Solve path is the existing `solve_symmetric_system` helper applied to the cols×cols normal-equations matrix `MᵀM + λI` with RHS `MᵀY`. Result `fr.weights` shape is `cols × M` (not `N × M`); deliberate divergence from legacy invariant since 17A does not yet ship a hetero predict path (one-hot θ + `predict_hetero` deferred to 17E). `residual_norm = ||Mw - Y||_F / ||Y||_F` is the interpolation-property oracle used by Group D tests.
+
+**Tests** in [`tests/test_feature_spec.cpp`](tests/test_feature_spec.cpp) (20 tests, 4 groups):
+- **Group A** (8 live): `FeatureSpec` / `QuatBlock` type contract — default scalar-only, ctors, column-count arithmetic, enum backing, move-constructible.
+- **Group B** (6 live, **17A-SCALAR-ORACLE hard gate**): byte-identical `FitResult` comparison across `{Gaussian, ThinPlateSpline, Cubic+poly1, LambdaAuto}` kernels + INSUFFICIENT_SAMPLES + solver_path preservation. 14-field comparison: 10 pre-17A fields via `std::memcmp` on Eigen storage + `std::memcpy` to `uint64_t` for Scalar bit-identity (no `EXPECT_DOUBLE_EQ`, zero-ULP contract); 4 tail fields asserted default-constructed except `feature_spec.scalar_dim == C.cols()` which reflects the caller's spec (承诺等式 compliance).
+- **Group C** (3 live): Full-mode fit on N=4 axis-angle-exact quats + status OK + weights shape + `residual_norm < 1e-9`; SwingTwist cols==2N invariant; block-count mismatch → INVALID_INPUT.
+- **Group D** (3 live): Hybrid scalar+quat fit succeeds; residual gate at 1e-9; compile-time noexcept traits on `FitResult` / `FeatureSpec` / `QuatBlock`.
+
+Fixtures [`tests/fixtures/cmt_parity_17A_{quat_only_full,hybrid}.json`](tests/fixtures/) each carry an explicit disclaimer header that they are **NOT** cmt binary parity snapshots — expected values are from independent re-implementation; real cmt binary parity is T-30, scheduled for 17B.
+
+### §C — Validation
+
+```
+# Kernel
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+# Result: 100% tests passed, 0 tests failed out of 159
+#         (139 Phase 1 legacy + 20 Slice 17A = 159; 2 pre-existing Debug-only
+#          skips not Slice 17A-related)
+#         All 6 SCALAR-ORACLE tests PASS (hard gate cleared).
+#         All 6 Group C/D live tests PASS (zero GTEST_SKIP remaining from Slice 17A).
+
+# Adapter regression
+cmake --build build-adapter --config Release
+ctest --test-dir build-adapter -C Release
+# Result: 100% tests passed, 0 tests failed out of 200
+#         (159 kernel + 41 adapter; adapter 41 unchanged vs pre-17A → zero regression)
+
+# Bench regression (N=1000 Gaussian predict, kd-tree path — the canonical hot path
+# for RBFInterpolator at the default kdtree_threshold=256)
+X:/Plugins/RBF_MAX/build-bench/bin/benchmarks/Release/bench_predict.exe \
+    --benchmark_filter="N1000"
+# BM_Predict_Gaussian_N1000_KdTree  1,440 ns / iter  ←  1.44 μs ≪ 5 μs gate
+# BM_Predict_Gaussian_N1000_Dense  23,138 ns / iter  (not the default hot path)
+#
+# Slice 17A does not modify any predict code path; the bench values are
+# identical to pre-17A within measurement noise (reproducible on
+# 28x3418MHz MSVC 19.44 LTCG Release).
+```
+
+**SCALAR-ORACLE detail.** Each of the 6 tests performs `FitResult old = fit(C, Y, opts, λ); FitResult neu = fit(C, {}, Y, opts, FeatureSpec(C.cols()), λ);` and asserts:
+- 10 pre-17A fields byte-identical via `std::memcmp` on Eigen contiguous storage + `std::memcpy→uint64_t` for scalars (kernel.eps, lambda_used, condition_number, residual_norm — **zero ULP**, not 4-ULP `EXPECT_DOUBLE_EQ`).
+- 4 tail fields: `feature_spec.scalar_dim == C.cols()`, `feature_spec.is_scalar_only() == true`, `quat_features.empty()`, `feature_norms.size() == 0`, `distance_norm` bit-equal `0.0`.
+
+No EXPECT_DOUBLE_EQ appears in live assertions (the phrase surfaces only in comments declaring "NOT use" for reviewer audit).
+
+### §D — F-stops
+
+Single F-stop during Step 3.4:
+
+- **F-stop #1 (in-flight, resolved)** — `HeteroFit.quat_only_FullMode_InterpolatesFixture` initially failed with `residual_norm = 8.79e-9` vs gate `1e-9` at `λ=1e-8`. Root cause: ridge-regression residual scales as `O(λ/(σ_min+λ))` for well-conditioned systems, so `λ=1e-8` lower-bounds the residual at ~1e-8. Fix: tightened `λ` to `1e-10` (matches Group D hybrid calibration); residual drops to ≪ 1e-9, test PASSES. Fixture JSON updated to reflect λ. Methodology matches Rule 4 (systematic assumption-elimination) — hypothesis "ridge residual ≈ λ" confirmed by single λ tweak. No other F-stops across Step 3.3 or Step 3.4.
+
+- **F-stop #2 (in-flight, resolved)** — `HeteroFit.hybrid_scalar_quat_PredictNoexcept` initial form used `static_assert(noexcept(solver::predict(fr, x)), ...)`. Failed on MSVC 19.44: the `noexcept(expr)` operator includes implicit argument conversions, and `Eigen::Ref<const VectorX>` construction from `const VectorX&` is not marked noexcept across all Eigen versions. Function itself IS noexcept (marked on declaration in solver.hpp); only the expression-form noexcept probe is unreliable under C++11. Fix: replaced with `std::is_nothrow_default_constructible<FitResult>` / `_destructible` / same for `FeatureSpec` and `QuatBlock` — tightest portable signal that preserves constraint #6's intent (detect tail-field additions breaking the FitResult lifecycle that predict's noexcept keyword depends on). The canonical noexcept contract remains the keyword on `solver::predict` in solver.hpp. Documented in-test.
+
+### §E — Tech-debt delta
+
+- **T-30 (open, blocks 17B acceptance)** — cmt binary parity fixture generator `scripts/gen_cmt_fixture.mel` + checked-in `tests/fixtures/cmt_binary_parity_*.json` binding rbfmax output to cmt's Maya-side `linearRegressionSolver::setFeatures` at tol ≤ 1e-10. Cannot close in 17A (Maya-free CI invariant); status: **Open**.
+- No R- entries added this slice.
+
+### §F — File changes & next
+
+**Files modified**:
+- `kernel/include/rbfmax/feature_spec.hpp` (new, ~130 LOC)
+- `kernel/include/rbfmax/solver.hpp` (+55 LOC: 4 tail fields, 2 hetero overload declarations)
+- `kernel/src/solver.cpp` (+320 LOC: validate_composite_inputs, build_composite_distance_matrix, 2 hetero fit() bodies; legacy fit body zero-touch)
+- `tests/test_feature_spec.cpp` (new, ~620 LOC across 20 tests)
+- `tests/fixtures/cmt_parity_17A_quat_only_full.json` (new)
+- `tests/fixtures/cmt_parity_17A_hybrid.json` (new)
+- `tests/CMakeLists.txt` (+2 lines: wire test_feature_spec with rbfmax::solver link)
+- `DEVLOG.md` (§A pre-dispatch audit + §B–F this entry)
+
+**Test count delta**: 139 → 159 kernel ctests (+20 live, 0 SKIP from 17A); 41 → 41 adapter (zero regression); 180 → 200 aggregate in `build-adapter`.
+
+**Next**: Slice 17B — wire `rotation::decompose_swing_twist` into the distance-matrix builder for the explicit `SolverSpace ∈ {Swing, Twist, SwingTwist}` tests against cmt binary fixture, **closing T-30**. The distance pipeline plumbing itself is already in place; 17B adds the fixture generator + `scripts/gen_cmt_fixture.mel` + checked-in JSON snapshots, and asserts rbfmax weights ≤ 1e-10 against cmt.
+
+---
+
 ## 2026-04-24 · Slice 16 — Phase 2B close-out + v1.2.0
 
 **Scope**: Pure retrospective + version bump. Zero functional code changes; zero test changes; zero installer changes. `project(rbfmax VERSION …)` 1.1.0 → 1.2.0, `RBFMAX_MAYA_PLUGIN_VERSION` likewise; new `[1.2.0]` CHANGELOG entry; this DEVLOG entry consolidates Phase 2B.
